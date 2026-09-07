@@ -1,4 +1,4 @@
-export type Role = 'vendor' | 'manager' | 'admin' | 'finance';
+export type Role = 'vendor' | 'manager' | 'admin' | 'finance' | 'domain_coo';
 
 export type Currency = 'USD' | 'EUR' | 'GBP' | 'INR' | 'SGD';
 
@@ -17,7 +17,10 @@ export type Permission =
   | 'MANAGE_TIMESHEET_DB'          // Admin: CRUD on central internal timesheets
   | 'OVERRIDE_APPROVALS'           // Admin: override or release held certificates
   | 'VIEW_AUDIT_LOGS'              // Admin: inspect full audit trails
-  | 'MANAGE_RBAC_POLICIES';        // Admin: configure security roles & permissions
+  | 'MANAGE_RBAC_POLICIES'         // Admin: configure security roles & permissions
+  | 'ACT_AS_DELEGATE'              // Domain COO / Admin: act as delegate for managers
+  | 'DOMAIN_COO_ESCALATION'        // Domain COO: handle escalated discrepancies (>7 days)
+  | 'VALIDATE_ARIBA_GR_INVOICE';   // Domain COO / AP: validate actual vendor invoice against approved clearance
 
 export interface UserProfile {
   id: string;
@@ -178,6 +181,9 @@ export interface DiscrepancyItem {
       delegatorName: string;
     };
   };
+
+  // Escalation tracking (>4 working days -> manager's manager; >7 days -> Domain COO)
+  escalationStatus?: EscalationStatus;
 }
 
 export type BatchApprovalStatus = 
@@ -219,6 +225,9 @@ export interface InvoiceBatch {
   revisionNumber?: number;
   duplicateOfBatchId?: string;
   duplicateWarning?: string;
+
+  // Escalation tracking for whole batch
+  escalationStatus?: EscalationStatus;
 
   // Pre-invoice clearance for SAP Ariba
   clearanceCertificate?: PreInvoiceClearance;
@@ -360,4 +369,85 @@ export interface BulkApprovalRequest {
   justificationNotes: string;
   adjustedDaysMap?: { [itemId: string]: number };
 }
+
+// Escalation Status Tracking
+export interface EscalationStatus {
+  isEscalated: boolean;
+  escalationLevel: 'NONE' | 'LEVEL_1_MANAGER_ESCALATION' | 'LEVEL_2_COO_ESCALATION';
+  elapsedDays: number;
+  elapsedWorkingDays: number;
+  escalatedToEmail?: string;
+  escalatedToName?: string;
+  escalatedToRole?: string;
+  escalatedAt?: string;
+  reason?: string;
+}
+
+// Domain COO Group Mapping with Managers and UBRs
+export interface DomainCooMapping {
+  id: string;
+  domainName: string;
+  ubrCode: string; // Unit / Business Unit code, e.g. 'UBR-CLOUD-01'
+  cooName: string;
+  cooEmail: string;
+  cooTitle: string;
+  avatarUrl?: string;
+  managerEmails: string[];
+  departmentNames: string[];
+  skipLevelManagers: {
+    managerEmail: string;
+    skipLevelEmail: string;
+    skipLevelName: string;
+    skipLevelTitle: string;
+  }[];
+}
+
+// Actual Vendor Commercial Invoice Line (Extracted for Domain COO Ariba GR Validation)
+export interface ActualInvoiceLine {
+  lineIndex: number;
+  resourceEmail?: string;
+  resourceName?: string;
+  poNumber?: string;
+  poLineItem?: string;
+  billedDays: number;
+  dailyRate: number;
+  preTaxAmount: number; // Excludes tax - strictly pre-tax amount
+  rawTaxRate?: number; // Informational only
+  rawTaxAmount?: number; // Informational only - excluded from validation
+  rawGrossTotal?: number; // Informational only
+  // Matching against Manager Approved Clearance
+  matchedApprovedItem?: DiscrepancyItem;
+  dayMatchStatus: 'MATCH' | 'MISMATCH' | 'UNMATCHED';
+  rateMatchStatus: 'MATCH' | 'MISMATCH' | 'UNMATCHED';
+  dayDifference: number; // actual billedDays - approvedDays
+  rateDifference: number; // actual dailyRate - approvedRate
+  statusNote: string;
+}
+
+// Domain COO Ariba Goods Receipt (GR) Validation Result
+export interface AribaGrValidationResult {
+  validationId: string;
+  validatedAt: string;
+  validatedByEmail: string;
+  validatedByName: string;
+  certificateId: string;
+  poNumber: string;
+  vendorName: string;
+  billingMonth: string;
+  currency: Currency;
+  decision: 'PROCEED_WITH_GR' | 'DO_NOT_PROCEED_MISMATCH';
+  totalApprovedDays: number;
+  totalActualInvoiceDays: number;
+  daysDifference: number; // Primary match metric
+  totalApprovedPreTaxAmount: number; // Indicative
+  totalActualInvoicePreTaxAmount: number; // Indicative
+  financialDifference: number; // Indicative
+  linesValidatedCount: number;
+  mismatchedLinesCount: number;
+  matchedLinesCount: number;
+  lineResults: ActualInvoiceLine[];
+  summaryMessage: string;
+  taxNote: string; // Reminder that taxes are excluded from reconciliation
+}
+
 

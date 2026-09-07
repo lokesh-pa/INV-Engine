@@ -36,7 +36,8 @@ import {
   AuditLogEntry
 } from '../types';
 import { formatCurrency } from '../utils/reconciliationEngine';
-import { SAMPLE_USERS } from '../data/mockCentralDb';
+import { SAMPLE_USERS, getDomainCooForManager, getSkipLevelManagerForManager } from '../data/mockCentralDb';
+import { evaluateItemEscalation, buildEscalationNotification } from '../utils/escalationHelper';
 import { hasPermission } from '../utils/rbac';
 import { DelegationModal } from './DelegationModal';
 import { BulkApprovalModal } from './BulkApprovalModal';
@@ -68,6 +69,7 @@ interface ManagerPortalProps {
   onOpenSendReminder?: (options?: { poNumber?: string; batchId?: string; recipientEmail?: string; item?: DiscrepancyItem }) => void;
   onResyncWithTimesheets?: (batchId?: string) => void;
   onOpenPdfReport?: (batch: InvoiceBatch) => void;
+  onSendNotification?: (notification: any) => void;
 }
 
 export const ManagerPortal: React.FC<ManagerPortalProps> = ({
@@ -84,7 +86,8 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   auditLogs = [],
   onOpenSendReminder,
   onResyncWithTimesheets,
-  onOpenPdfReport
+  onOpenPdfReport,
+  onSendNotification
 }) => {
   const [selectedItemForReview, setSelectedItemForReview] = useState<{
     batch: InvoiceBatch;
@@ -139,6 +142,10 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [delegationScopeFilter, setDelegationScopeFilter] = useState<'ALL' | 'MY_RESOURCES' | 'DELEGATED_ONLY'>('ALL');
 
+  // SLA Aging & Escalation Simulation State
+  const [simulatedAgingDays, setSimulatedAgingDays] = useState<number>(0);
+  const [escalationNoticeSentToast, setEscalationNoticeSentToast] = useState<string | null>(null);
+
   // Delegations evaluation
   const activeOutgoingDelegation = delegations.find(
     d => d.delegatorEmail.toLowerCase() === currentUser.email.toLowerCase() && d.active
@@ -158,9 +165,19 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
     });
   });
 
-  // Filter for this manager or delegated authority
+  // Filter for this manager or delegated authority (including Domain COO)
   const managerItems = allItems.filter(({ item }) => {
     if (showAllManagersToggle) return true;
+
+    // Check if Domain COO has executive delegated oversight
+    if (currentUser.role === 'domain_coo') {
+      const cooMapping = getDomainCooForManager(item.managerEmail, item.department);
+      const isUnderDomain = cooMapping.cooEmail.toLowerCase() === currentUser.email.toLowerCase() || currentUser.email === 'marcus.sterling@abcompany.com';
+      if (delegationScopeFilter === 'MY_RESOURCES') {
+        return isUnderDomain;
+      }
+      return true; // Domain COO can oversee domain or all
+    }
 
     const isDirectManager = item.managerEmail.toLowerCase() === currentUser.email.toLowerCase();
     const isDelegatedManager = delegatedManagerEmails.includes(item.managerEmail.toLowerCase());
@@ -440,6 +457,26 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
           </div>
         </div>
 
+        {/* Domain COO Executive Oversight Banner */}
+        {currentUser.role === 'domain_coo' && (
+          <div className="mt-4 p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-bold text-indigo-950">Domain COO Executive Oversight & Delegate Mode</p>
+                  <span className="px-2 py-0.2 rounded-full text-[9px] font-bold bg-indigo-600 text-white uppercase">Domain COO</span>
+                </div>
+                <p className="text-[11px] text-indigo-800 mt-0.5">
+                  You hold executive delegated signing authority for all cost-centers under your domain UBR mapping. You can review, approve variances, or reject lines directly as the executive escalation point.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Delegated Authority Banner (If user is acting on behalf of another manager) */}
         {activeIncomingDelegations.length > 0 && (
           <div className="mt-4 p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -489,6 +526,74 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                 Delegated Only
               </button>
             </div>
+          </div>
+        )}
+
+        {/* SLA Escalation Policy Bar */}
+        <div className="mt-4 p-3.5 bg-slate-900 text-slate-100 rounded-xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-white">Reconciliation SLA Governance:</span>
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-400/30 font-mono">Level 1: &gt;4 Working Days → Manager's Manager (VP)</span>
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded border border-purple-400/30 font-mono">Level 2: &ge;7 Total Days → Domain COO</span>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Managers must act within 4 working days of reconciliation initiation. After 7 days total elapsed, automated notification is dispatched to Domain COO.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full lg:w-auto justify-end flex-wrap">
+            <div className="flex items-center gap-1.5 bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700 text-xs">
+              <span className="text-[11px] text-slate-400">Simulate Aging:</span>
+              <select
+                value={simulatedAgingDays}
+                onChange={(e) => setSimulatedAgingDays(Number(e.target.value))}
+                className="bg-slate-900 text-white text-xs px-2 py-0.5 rounded border border-slate-600 focus:outline-hidden"
+              >
+                <option value={0}>0 Days (Current Realtime)</option>
+                <option value={4}>4 Working Days (Triggers Level 1 VP Escalation)</option>
+                <option value={7}>7 Calendar Days (Triggers Level 2 Domain COO Escalation)</option>
+                <option value={10}>10 Days (Critical Domain COO Escalation)</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => {
+                let sentCount = 0;
+                managerDiscrepancies.forEach(({ batch, item }) => {
+                  if (!item.managerDecision && item.status !== 'REJECTED_BY_MANAGER') {
+                    const esc = evaluateItemEscalation(item, batch.approvalInitiatedAt, simulatedAgingDays);
+                    if (esc.isEscalated && esc.escalationLevel !== 'NONE' && onSendNotification) {
+                      const notif = buildEscalationNotification(batch, [item], esc.escalationLevel);
+                      onSendNotification(notif);
+                      sentCount++;
+                    }
+                  }
+                });
+                setEscalationNoticeSentToast(
+                  sentCount > 0 
+                    ? `Dispatched ${sentCount} automated escalation notification(s) to Skip-Level Managers and Domain COO.`
+                    : `No SLA breaches detected for the selected aging offset (${simulatedAgingDays} days).`
+                );
+                setTimeout(() => setEscalationNoticeSentToast(null), 5000);
+              }}
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors shrink-0 flex items-center gap-1"
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              <span>Trigger Escalation Check</span>
+            </button>
+          </div>
+        </div>
+
+        {escalationNoticeSentToast && (
+          <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 text-xs flex items-center justify-between">
+            <span>{escalationNoticeSentToast}</span>
+            <button onClick={() => setEscalationNoticeSentToast(null)} className="text-xs font-bold text-emerald-700">Dismiss</button>
           </div>
         )}
 
@@ -693,6 +798,8 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                 const isResubmitted = item.status === 'RESUBMITTED_FOR_REVIEW';
                 const isSelected = selectedItemIds.has(item.id);
                 const isDelegatedItem = item.managerEmail.toLowerCase() !== currentUser.email.toLowerCase();
+                const escalationInfo = evaluateItemEscalation(item, batch.approvalInitiatedAt, simulatedAgingDays);
+                const domainCoo = getDomainCooForManager(item.managerEmail, item.department);
 
                 return (
                   <div
@@ -704,6 +811,10 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                         ? 'border-red-400 bg-red-50/20 ring-1 ring-red-300'
                         : isResubmitted
                         ? 'border-purple-300 bg-purple-50/20'
+                        : escalationInfo.escalationLevel === 'LEVEL_2_COO_ESCALATION' && !isResolved
+                        ? 'border-purple-300 bg-purple-50/15'
+                        : escalationInfo.escalationLevel === 'LEVEL_1_MANAGER_ESCALATION' && !isResolved
+                        ? 'border-amber-300 bg-amber-50/15'
                         : isResolved 
                         ? 'border-slate-200' 
                         : 'border-red-200 bg-red-50/10'
@@ -754,6 +865,20 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                               </span>
                             )}
 
+                            {/* Escalation Badges */}
+                            {escalationInfo.escalationLevel === 'LEVEL_1_MANAGER_ESCALATION' && !isResolved && (
+                              <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] rounded-full font-bold uppercase flex items-center gap-1 shadow-2xs">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>Level 1 Escalated ({escalationInfo.elapsedWorkingDays}d &gt; 4d SLA)</span>
+                              </span>
+                            )}
+                            {escalationInfo.escalationLevel === 'LEVEL_2_COO_ESCALATION' && !isResolved && (
+                              <span className="px-2 py-0.5 bg-purple-600 text-white text-[10px] rounded-full font-bold uppercase flex items-center gap-1 shadow-2xs animate-pulse">
+                                <BellRing className="w-3 h-3" />
+                                <span>Level 2 Domain COO Escalated ({escalationInfo.elapsedDays}d &ge; 7d)</span>
+                              </span>
+                            )}
+
                             {/* Bulk Approved Badge */}
                             {item.managerDecision?.isBulkApproved && (
                               <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] rounded-full font-bold border border-indigo-200 uppercase flex items-center gap-1">
@@ -775,11 +900,34 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                             )}
                           </div>
 
+                          {/* Level 1 or 2 Escalation Detail Banner */}
+                          {escalationInfo.isEscalated && !isResolved && (
+                            <div className={`p-2.5 rounded-lg border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                              escalationInfo.escalationLevel === 'LEVEL_2_COO_ESCALATION'
+                                ? 'bg-purple-50/80 border-purple-200 text-purple-950'
+                                : 'bg-amber-50/80 border-amber-200 text-amber-950'
+                            }`}>
+                              <div className="flex items-center gap-2">
+                                <BellRing className={`w-4 h-4 shrink-0 ${escalationInfo.escalationLevel === 'LEVEL_2_COO_ESCALATION' ? 'text-purple-700' : 'text-amber-700'}`} />
+                                <div>
+                                  <span className="font-bold">
+                                    {escalationInfo.escalationLevel === 'LEVEL_2_COO_ESCALATION' ? 'Domain COO Escalation Triggered:' : 'Skip-Level Escalation Triggered:'}
+                                  </span>{' '}
+                                  <span>Escalated to <strong>{escalationInfo.escalatedToName}</strong> ({escalationInfo.escalatedToRole} - {escalationInfo.escalatedToEmail})</span>
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/90 border border-current font-bold shrink-0">
+                                {escalationInfo.elapsedWorkingDays} working days / {escalationInfo.elapsedDays} calendar days inactive
+                              </span>
+                            </div>
+                          )}
+
                           <div className="text-xs text-slate-600 grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
                             <div>
                               <span className="text-slate-400 block text-[10px] uppercase font-semibold">Vendor & PO</span>
                               <span className="font-medium text-slate-800">{item.vendorName}</span>
                               <div className="text-[10px] text-slate-500 font-mono">{item.poNumber}</div>
+                              <div className="text-[10px] text-indigo-700 font-medium">UBR: {domainCoo.ubrCode}</div>
                             </div>
 
                             <div>

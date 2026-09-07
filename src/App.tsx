@@ -19,7 +19,8 @@ import {
   INITIAL_CENTRAL_TIMESHEETS, 
   SAMPLE_VENDOR_INVOICE_ROWS,
   INITIAL_DELEGATIONS,
-  SAMPLE_HISTORICAL_BATCHES
+  SAMPLE_HISTORICAL_BATCHES,
+  getDomainCooForManager
 } from './data/mockCentralDb';
 import { 
   reconcileInvoiceRows, 
@@ -40,6 +41,7 @@ import { AccessDenied } from './components/AccessDenied';
 import { RbacPolicyModal } from './components/RbacPolicyModal';
 import { SendReminderModal, ReminderPayload } from './components/SendReminderModal';
 import { AuditPdfReportModal } from './components/AuditPdfReportModal';
+import { AribaGrValidator } from './components/AribaGrValidator';
 import { Shield, Lock, ShieldCheck, RefreshCw } from 'lucide-react';
 
 export default function App() {
@@ -578,7 +580,47 @@ export default function App() {
       senderEmail: approverEmail
     };
 
-    setNotifications(prev => [vendorNotif, apFinanceNotif, ...prev]);
+    // 3. Automated Executive Copy to Domain COO
+    const domainCoo = getDomainCooForManager(
+      clearedBatch.items[0]?.managerEmail,
+      clearedBatch.items[0]?.department
+    );
+
+    const domainCooNotif: EmailNotification = {
+      id: `NOTIF-CLEARANCE-COO-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      toEmail: domainCoo.cooEmail,
+      toName: `${domainCoo.cooName} (Domain COO - ${domainCoo.domainName})`,
+      fromEmail: 'ariba-clearance@abcompany.com',
+      fromName: 'AB Company SAP Ariba Pre-Invoice Clearance Desk',
+      subject: `[COPY TO DOMAIN COO] Pre-Invoice Clearance Certificate Issued for PO ${clearedBatch.poNumber} (${clearedBatch.billingMonth})`,
+      previewText: `Domain COO Executive Copy: Reconciliation flow complete for ${clearedBatch.vendorName} on PO ${clearedBatch.poNumber} (UBR: ${domainCoo.ubrCode}). PICC: ${cert.certificateId}.`,
+      contentBody: `Dear ${domainCoo.cooName},\n\nAs the designated Domain COO for ${domainCoo.domainName} (${domainCoo.ubrCode}), you are receiving this executive copy of the Pre-Invoice Clearance Certificate issued upon complete managerial reconciliation.\n\nVendor: ${clearedBatch.vendorName}\nPurchase Order: ${clearedBatch.poNumber}\nUBR / Domain: ${domainCoo.ubrCode} (${domainCoo.domainName})\nBilling Month: ${clearedBatch.billingMonth}\nPre-Invoice Clearance Certificate (PICC): ${cert.certificateId}\nSAP Ariba Submission Token: ${cert.aribaSubmissionCode}\nTotal Cleared Line Items: ${cert.reconciledLineItemsCount}\nTotal Approved Days: ${cert.totalClearedDays} d\nTotal Approved Billing Amount (Pre-Tax): ${formatCurrency(cert.totalClearedAmount, cert.currency)}\nAuthorized Approver: ${approverName} (${approverEmail})\n\nAction Link: Use the Domain COO Ariba Goods Receipt Validator to cross-examine the vendor's actual invoice against this clearance before approving Goods Receipt (GR) in SAP Ariba.`,
+      sentAt: now,
+      read: false,
+      poNumber: clearedBatch.poNumber,
+      batchId: clearedBatch.id,
+      discrepanciesCount: 0,
+      financialImpact: 0,
+      currency: clearedBatch.currency,
+      actionRequiredLink: 'ariba_validator',
+      vendorName: clearedBatch.vendorName,
+      billingMonth: clearedBatch.billingMonth,
+      totalBilledDays: cert.totalClearedDays,
+      totalTimesheetDays: cert.totalClearedDays,
+      matchedCount: cert.reconciledLineItemsCount,
+      isClearanceNotification: true,
+      clearanceCertificateId: cert.certificateId,
+      aribaSubmissionCode: cert.aribaSubmissionCode,
+      verificationAuditHash: cert.verificationAuditHash,
+      totalClearedAmount: cert.totalClearedAmount,
+      totalClearedDays: cert.totalClearedDays,
+      clearedStatus: cert.status,
+      senderRole: 'manager',
+      senderName: approverName,
+      senderEmail: approverEmail
+    };
+
+    setNotifications(prev => [vendorNotif, apFinanceNotif, domainCooNotif, ...prev]);
 
     setAuditLogs(prev => [
       {
@@ -588,7 +630,7 @@ export default function App() {
         actorName: approverName,
         actorRole: 'finance',
         action: 'CLEARANCE_CERTIFICATE_ISSUED_AND_DISPATCHED',
-        details: `Pre-Invoice Clearance Certificate ${cert.certificateId} generated. Automated clearance notifications dispatched to Vendor Initiator (${clearedBatch.vendorEmail}) and AP Finance (ap-clearance@abcompany.com). Ariba Code: ${cert.aribaSubmissionCode}.`,
+        details: `Pre-Invoice Clearance Certificate ${cert.certificateId} generated. Automated clearance notifications dispatched to Vendor Initiator (${clearedBatch.vendorEmail}), AP Finance (ap-clearance@abcompany.com), and Executive Copy to Domain COO (${domainCoo.cooEmail}, ${domainCoo.ubrCode}). Ariba Code: ${cert.aribaSubmissionCode}.`,
         poNumber: clearedBatch.poNumber,
         batchId: clearedBatch.id
       },
@@ -1443,6 +1485,9 @@ export default function App() {
                 } else if (targetTab === 'finance' || targetTab === 'database') {
                   const u = SAMPLE_USERS.find(user => user.role === 'finance' || user.role === 'admin') || SAMPLE_USERS[4];
                   setCurrentUser(u);
+                } else if (targetTab === 'ariba_validator') {
+                  const u = SAMPLE_USERS.find(user => user.role === 'domain_coo') || SAMPLE_USERS[1];
+                  setCurrentUser(u);
                 }
               }
               setActiveTab(targetTab);
@@ -1451,6 +1496,30 @@ export default function App() {
 
             return (
               <>
+                {/* Domain COO Ariba GR Validator Tab */}
+                {(() => {
+                  const allowed = canAccessTab(currentUser.role, 'ariba_validator');
+                  return (
+                    <div
+                      id="sidebar-nav-ariba-validator"
+                      onClick={() => handleNavigateWithRole('ariba_validator')}
+                      className={`flex items-center justify-between p-3 rounded-lg cursor-pointer text-sm font-medium transition-colors ${
+                        activeTab === 'ariba_validator'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : allowed
+                          ? 'text-indigo-200 hover:bg-slate-800 hover:text-white'
+                          : 'text-slate-400 hover:bg-slate-800/80 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-5 h-5 flex items-center justify-center opacity-90 text-base">🛡️</div>
+                        <span>Ariba GR Validator</span>
+                      </div>
+                      <span className="text-[10px] bg-indigo-500/30 text-indigo-200 px-1.5 py-0.5 rounded border border-indigo-400/40">Domain COO</span>
+                    </div>
+                  );
+                })()}
+
                 {/* Vendor Tab */}
                 {(() => {
                   const allowed = canAccessTab(currentUser.role, 'vendor');
@@ -1649,7 +1718,7 @@ export default function App() {
             setCurrentUser(u);
             // If tab is not allowed for new role, navigate to their primary tab
             if (!canAccessTab(u.role, activeTab)) {
-              const primaryTab = u.role === 'vendor' ? 'vendor' : u.role === 'manager' ? 'manager' : 'finance';
+              const primaryTab = u.role === 'vendor' ? 'vendor' : u.role === 'manager' ? 'manager' : u.role === 'domain_coo' ? 'ariba_validator' : 'finance';
               setActiveTab(primaryTab);
             }
           }}
@@ -1732,6 +1801,9 @@ export default function App() {
                   onOpenSendReminder={handleOpenSendReminder}
                   onResyncWithTimesheets={handleResyncBatchWithTimesheets}
                   onOpenPdfReport={handleOpenPdfReport}
+                  onSendNotification={(notif) => {
+                    setNotifications(prev => [notif, ...prev]);
+                  }}
                 />
               )}
 
@@ -1788,6 +1860,33 @@ export default function App() {
                   }}
                   onOpenSendReminder={() => handleOpenSendReminder()}
                   onTriggerDailyReminders={() => triggerDailyManagerReminders(true)}
+                />
+              )}
+
+              {activeTab === 'ariba_validator' && (
+                <AribaGrValidator
+                  batches={batches}
+                  currentUser={currentUser}
+                  formatCurrency={formatCurrency}
+                  onLogAudit={(action, details, batchId, poNumber) => {
+                    setAuditLogs(prev => [
+                      {
+                        id: `LOG-${Date.now()}`,
+                        timestamp: new Date().toISOString(),
+                        actorEmail: currentUser.email,
+                        actorName: currentUser.name,
+                        actorRole: currentUser.role,
+                        action,
+                        details,
+                        poNumber,
+                        batchId
+                      },
+                      ...prev
+                    ]);
+                  }}
+                  onSendNotification={(notif) => {
+                    setNotifications(prev => [notif, ...prev]);
+                  }}
                 />
               )}
             </>

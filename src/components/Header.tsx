@@ -53,6 +53,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'Central Timesheet Master';
       case 'notifications':
         return 'Manager Notification Relay';
+      case 'ariba_validator':
+        return 'Ariba GR Pre-Receipt Validator';
       default:
         return 'Pre-Invoice Clearance';
     }
@@ -70,6 +72,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'Central Approved Timesheet Records';
       case 'notifications':
         return 'Automated Alert Dispatch Log';
+      case 'ariba_validator':
+        return 'Domain COO Invoice Alignment & SAP Ariba Goods Receipt Pre-Check';
       default:
         return 'AB Company Internal Verification Portal';
     }
@@ -131,10 +135,15 @@ export const Header: React.FC<HeaderProps> = ({
                 if (selected.role === 'vendor') onChangeTab('vendor');
                 if (selected.role === 'manager') onChangeTab('manager');
                 if (selected.role === 'finance' || selected.role === 'admin') onChangeTab('finance');
+                if (selected.role === 'domain_coo') onChangeTab('ariba_validator');
               }
             }}
             className="text-xs bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-800 font-medium cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-500"
           >
+            <optgroup label="👔 Domain COO Executive Group">
+              <option value="user-coo-1">Marcus Sterling (Domain COO - Cloud)</option>
+              <option value="user-coo-2">Victoria Vance (Domain COO - Core Apps)</option>
+            </optgroup>
             <optgroup label="🛡️ Global Administration">
               <option value="user-admin-1">David Kim (Global Admin & Systems)</option>
             </optgroup>

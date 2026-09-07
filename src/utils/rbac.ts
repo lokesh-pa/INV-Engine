@@ -47,7 +47,7 @@ export const ROLE_CONFIGS: Record<Role, RoleConfig> = {
     badgeLabel: 'Global Admin',
     badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     description: 'Has full system governance: oversees global mismatch dashboards, manages central timesheet master database, audits approval logs, manages RBAC policies, and releases clearance certificates.',
-    allowedTabs: ['vendor', 'manager', 'finance', 'database', 'notifications'],
+    allowedTabs: ['vendor', 'manager', 'finance', 'database', 'notifications', 'ariba_validator'],
     permissions: [
       'UPLOAD_INVOICES',
       'VIEW_OWN_RECONCILIATION',
@@ -63,7 +63,10 @@ export const ROLE_CONFIGS: Record<Role, RoleConfig> = {
       'MANAGE_TIMESHEET_DB',
       'OVERRIDE_APPROVALS',
       'VIEW_AUDIT_LOGS',
-      'MANAGE_RBAC_POLICIES'
+      'MANAGE_RBAC_POLICIES',
+      'ACT_AS_DELEGATE',
+      'DOMAIN_COO_ESCALATION',
+      'VALIDATE_ARIBA_GR_INVOICE'
     ]
   },
   finance: {
@@ -72,7 +75,7 @@ export const ROLE_CONFIGS: Record<Role, RoleConfig> = {
     badgeLabel: 'Finance Admin',
     badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     description: 'Corporate Accounts Payable administrator with full fiscal oversight across all vendor purchase orders and clearance controls.',
-    allowedTabs: ['vendor', 'manager', 'finance', 'database', 'notifications'],
+    allowedTabs: ['vendor', 'manager', 'finance', 'database', 'notifications', 'ariba_validator'],
     permissions: [
       'UPLOAD_INVOICES',
       'VIEW_OWN_RECONCILIATION',
@@ -88,7 +91,29 @@ export const ROLE_CONFIGS: Record<Role, RoleConfig> = {
       'MANAGE_TIMESHEET_DB',
       'OVERRIDE_APPROVALS',
       'VIEW_AUDIT_LOGS',
-      'MANAGE_RBAC_POLICIES'
+      'MANAGE_RBAC_POLICIES',
+      'VALIDATE_ARIBA_GR_INVOICE'
+    ]
+  },
+  domain_coo: {
+    role: 'domain_coo',
+    label: 'Domain Chief Operating Officer (COO)',
+    badgeLabel: 'Domain COO Group',
+    badgeColor: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    description: 'Executive leadership group: acts as manager delegate, resolves escalated discrepancies (>4 working days & >7 days), receives completed clearance copies, and validates vendor invoices before Ariba Goods Receipt (GR).',
+    allowedTabs: ['ariba_validator', 'manager', 'finance', 'notifications', 'database'],
+    permissions: [
+      'REVIEW_ASSIGNED_RESOURCES',
+      'APPROVE_MATCHED_LINES',
+      'APPROVE_DISCREPANCIES',
+      'ADJUST_TO_TIMESHEET',
+      'REJECT_INVOICE_LINE',
+      'VIEW_ALL_VENDORS',
+      'VIEW_ARIBA_CLEARANCE',
+      'VIEW_AUDIT_LOGS',
+      'ACT_AS_DELEGATE',
+      'DOMAIN_COO_ESCALATION',
+      'VALIDATE_ARIBA_GR_INVOICE'
     ]
   }
 };
@@ -124,6 +149,8 @@ export function getRequiredRoleForTab(tab: string): string {
       return 'Administrator / AP Finance Controller';
     case 'database':
       return 'Administrator (Central Timesheet Database)';
+    case 'ariba_validator':
+      return 'Domain COO / AP Finance Auditor';
     default:
       return 'Authorized Role';
   }

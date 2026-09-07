@@ -1,4 +1,4 @@
-import { InternalTimesheet, UserProfile, Currency } from '../types';
+import { InternalTimesheet, UserProfile, Currency, DomainCooMapping } from '../types';
 
 export const CURRENT_BILLING_MONTH = '2026-08';
 
@@ -10,6 +10,22 @@ export const SAMPLE_USERS: UserProfile[] = [
     role: 'vendor',
     vendorName: 'Apex Global Solutions',
     avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=60'
+  },
+  {
+    id: 'user-coo-1',
+    name: 'Marcus Sterling',
+    email: 'marcus.sterling.coo@abcompany.com',
+    role: 'domain_coo',
+    department: 'Cloud & Infrastructure (Domain COO)',
+    avatarUrl: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=120&auto=format&fit=crop&q=60'
+  },
+  {
+    id: 'user-coo-2',
+    name: 'Victoria Vance',
+    email: 'victoria.vance.coo@abcompany.com',
+    role: 'domain_coo',
+    department: 'Core Applications & Banking (Domain COO)',
+    avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=60'
   },
   {
     id: 'user-manager-1',
@@ -52,6 +68,105 @@ export const SAMPLE_USERS: UserProfile[] = [
     avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=60'
   }
 ];
+
+// Mapping of Managers and UBRs to Domain COOs and Skip-Level Managers
+export const DOMAIN_COO_MAPPINGS: DomainCooMapping[] = [
+  {
+    id: 'coo-domain-1',
+    domainName: 'Cloud Infrastructure & Platform Architecture',
+    ubrCode: 'UBR-CLOUD-01',
+    cooName: 'Marcus Sterling',
+    cooEmail: 'marcus.sterling.coo@abcompany.com',
+    cooTitle: 'Domain Chief Operating Officer (Cloud & Platforms)',
+    avatarUrl: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=120&auto=format&fit=crop&q=60',
+    managerEmails: ['sarah.jenkins@abcompany.com'],
+    departmentNames: ['Cloud & Infrastructure Architecture'],
+    skipLevelManagers: [
+      {
+        managerEmail: 'sarah.jenkins@abcompany.com',
+        skipLevelEmail: 'rachel.torres.vp@abcompany.com',
+        skipLevelName: 'Rachel Torres',
+        skipLevelTitle: 'Vice President of Global Cloud Engineering'
+      }
+    ]
+  },
+  {
+    id: 'coo-domain-2',
+    domainName: 'Core Digital Applications & Enterprise Systems',
+    ubrCode: 'UBR-APPS-02',
+    cooName: 'Victoria Vance',
+    cooEmail: 'victoria.vance.coo@abcompany.com',
+    cooTitle: 'Domain Chief Operating Officer (Core Applications)',
+    avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=60',
+    managerEmails: ['david.chen@abcompany.com'],
+    departmentNames: ['Core Applications & Backend'],
+    skipLevelManagers: [
+      {
+        managerEmail: 'david.chen@abcompany.com',
+        skipLevelEmail: 'jonathan.wu.vp@abcompany.com',
+        skipLevelName: 'Jonathan Wu',
+        skipLevelTitle: 'Vice President of Core Enterprise Architecture'
+      }
+    ]
+  },
+  {
+    id: 'coo-domain-3',
+    domainName: 'Enterprise Data Platforms & Artificial Intelligence',
+    ubrCode: 'UBR-DATA-03',
+    cooName: 'Sanjay Gupta',
+    cooEmail: 'sanjay.gupta.coo@abcompany.com',
+    cooTitle: 'Domain Chief Operating Officer (Data Platforms & AI)',
+    avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&auto=format&fit=crop&q=60',
+    managerEmails: ['elena.rostova@abcompany.com'],
+    departmentNames: ['Data Platforms & Machine Learning'],
+    skipLevelManagers: [
+      {
+        managerEmail: 'elena.rostova@abcompany.com',
+        skipLevelEmail: 'aris.thorne.vp@abcompany.com',
+        skipLevelName: 'Dr. Aris Thorne',
+        skipLevelTitle: 'Vice President of Data Platforms & AI'
+      }
+    ]
+  }
+];
+
+/**
+ * Lookup Domain COO mapped to a given Manager Email or Department
+ */
+export function getDomainCooForManager(managerEmail?: string, department?: string): DomainCooMapping {
+  if (managerEmail) {
+    const found = DOMAIN_COO_MAPPINGS.find(m => 
+      m.managerEmails.some(e => e.toLowerCase() === managerEmail.toLowerCase())
+    );
+    if (found) return found;
+  }
+  if (department) {
+    const found = DOMAIN_COO_MAPPINGS.find(m => 
+      m.departmentNames.some(d => d.toLowerCase() === department.toLowerCase())
+    );
+    if (found) return found;
+  }
+  // Default to primary Cloud Domain COO
+  return DOMAIN_COO_MAPPINGS[0];
+}
+
+/**
+ * Lookup Skip-Level Manager (Manager's Manager) for 4 working day escalation
+ */
+export function getSkipLevelManagerForManager(managerEmail: string) {
+  for (const domain of DOMAIN_COO_MAPPINGS) {
+    const skip = domain.skipLevelManagers.find(
+      s => s.managerEmail.toLowerCase() === managerEmail.toLowerCase()
+    );
+    if (skip) return skip;
+  }
+  return {
+    managerEmail,
+    skipLevelEmail: 'rachel.torres.vp@abcompany.com',
+    skipLevelName: 'Rachel Torres',
+    skipLevelTitle: 'Vice President of Engineering'
+  };
+}
 
 export interface PurchaseOrderInfo {
   poNumber: string;
