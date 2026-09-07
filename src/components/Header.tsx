@@ -63,19 +63,19 @@ export const Header: React.FC<HeaderProps> = ({
   const getTabSubtitle = () => {
     switch (activeTab) {
       case 'vendor':
-        return 'AB Company Internal Verification Portal';
+        return 'INV Engine | Pre-Invoice Clearance & Internal Verification Desk';
       case 'manager':
-        return 'Resource Manager Authorization Queue';
+        return 'INV Engine | Resource Manager Discrepancy Authorization Queue';
       case 'finance':
-        return 'Corporate Accounts Payable & Financial Control';
+        return 'INV Engine | Corporate Accounts Payable & Financial Control';
       case 'database':
-        return 'Central Approved Timesheet Records';
+        return 'INV Engine | Central Approved Timesheet Master Repository';
       case 'notifications':
-        return 'Automated Alert Dispatch Log';
+        return 'INV Engine | Automated Alert Dispatch Log & Escalations';
       case 'ariba_validator':
-        return 'Domain COO Invoice Alignment & SAP Ariba Goods Receipt Pre-Check';
+        return 'INV Engine | Domain COO Invoice Alignment & SAP Ariba Goods Receipt Pre-Check';
       default:
-        return 'AB Company Internal Verification Portal';
+        return 'INV Engine | Invoice Reconciliation Engine';
     }
   };
 

@@ -1,6 +1,6 @@
 {
-  "name": "Invoice Reconciliation System",
-  "description": "Automated vendor invoice and internal timesheet reconciliation portal with discrepancy flagging, manager approval workflows, email alerts, and Ariba pre-invoice clearance.",
+  "name": "INV Engine",
+  "description": "INV Engine (Invoice Reconciliation Engine) - High-performance automated pre-invoice reconciliation and clearance platform inspired by ICE, featuring multi-factor timesheet validation, discrepancy resolution, SLA escalation, and SAP Ariba clearance.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

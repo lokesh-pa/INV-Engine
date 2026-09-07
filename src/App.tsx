@@ -1453,14 +1453,19 @@ export default function App() {
       }`}>
         
         {/* Brand Header */}
-        <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-sm text-sm">
-              R
+            <div className="w-9 h-9 bg-linear-to-br from-amber-500 via-orange-600 to-indigo-700 rounded-xl flex items-center justify-center font-black text-white shadow-md text-xs tracking-wider ring-1 ring-amber-400/30">
+              INV
             </div>
             <div>
-              <span className="text-white font-semibold tracking-tight text-sm block">ReconConnect</span>
-              <span className="text-[10px] text-slate-400 font-mono">AB Company Invoicing</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-white font-bold tracking-tight text-base leading-tight">INV Engine</span>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-400/40 rounded font-mono tracking-tight" title="Internal Combustion Engine inspired: High-Throughput Reconciliation">
+                  ICE
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-400 block font-medium">Invoice Reconciliation Engine</span>
             </div>
           </div>
           <button 
