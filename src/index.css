@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* Dedicated High-Fidelity Print Engine for Offline Audit Reports & PICC Certificates */
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* When an audit report is active, isolate and print only the report */
+  body:has(#printable-audit-report) * {
+    visibility: hidden;
+  }
+
+  body:has(#printable-audit-report) #printable-audit-report,
+  body:has(#printable-audit-report) #printable-audit-report * {
+    visibility: visible;
+  }
+
+  #printable-audit-report {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 12mm 16mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
