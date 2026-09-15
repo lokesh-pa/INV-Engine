@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Role, 
   UserProfile, 
@@ -20,7 +20,8 @@ import {
   SAMPLE_VENDOR_INVOICE_ROWS,
   INITIAL_DELEGATIONS,
   SAMPLE_HISTORICAL_BATCHES,
-  getDomainCooForManager
+  getDomainCooForManager,
+  ACTIVE_PURCHASE_ORDERS
 } from './data/mockCentralDb';
 import { 
   reconcileInvoiceRows, 
@@ -80,7 +81,30 @@ export default function App() {
   });
 
   const [currentBatchId, setCurrentBatchId] = useState<string>(() => batches[0]?.id || '');
-  const currentBatch = batches.find(b => b.id === currentBatchId) || batches[0] || null;
+  
+  // Role & Vendor-Aware Active Batch Resolution
+  const currentBatch = useMemo(() => {
+    if (currentUser.role === 'vendor' && currentUser.vendorName) {
+      const vendorBatches = batches.filter(
+        b => b.vendorName?.toLowerCase().trim() === currentUser.vendorName!.toLowerCase().trim()
+      );
+      const matched = vendorBatches.find(b => b.id === currentBatchId);
+      return matched || vendorBatches[0] || null;
+    }
+    return batches.find(b => b.id === currentBatchId) || batches[0] || null;
+  }, [batches, currentBatchId, currentUser]);
+
+  // Automatically sync currency to the Purchase Order's Local Currency (Locked to PO)
+  useEffect(() => {
+    if (currentBatch?.currency) {
+      setCurrentCurrency(currentBatch.currency);
+    } else if (currentBatch?.poNumber) {
+      const activePo = ACTIVE_PURCHASE_ORDERS.find(p => p.poNumber === currentBatch.poNumber);
+      if (activePo?.currency) {
+        setCurrentCurrency(activePo.currency as Currency);
+      }
+    }
+  }, [currentBatch]);
 
   const handleOpenPdfReport = (batch?: InvoiceBatch | null) => {
     setSelectedAuditPdfBatch(batch || currentBatch || batches[0] || null);
@@ -911,6 +935,108 @@ export default function App() {
     }
   };
 
+  // Automated Action Summary Dispatch for Managers/Approvers/Admins
+  const sendReconciliationActionSummaryEmail = ({
+    approverName,
+    approverEmail,
+    actionType,
+    poNumber,
+    billingMonth,
+    vendorName,
+    batchId,
+    currency,
+    items,
+    justification
+  }: {
+    approverName: string;
+    approverEmail: string;
+    actionType: string;
+    poNumber: string;
+    billingMonth: string;
+    vendorName: string;
+    batchId: string;
+    currency: Currency;
+    items: Array<{
+      resourceName: string;
+      resourceEmail: string;
+      originalBilledDays: number;
+      approvedDays: number;
+      contractDailyRate: number;
+      varianceResolved: number;
+      financialAmount: number;
+      actionTaken: string;
+    }>;
+    justification: string;
+  }) => {
+    const totalVariance = items.reduce((acc, i) => acc + (i.financialAmount || 0), 0);
+    const totalDaysApproved = items.reduce((acc, i) => acc + (i.approvedDays || 0), 0);
+    const lineCount = items.length;
+    const nowIso = new Date().toISOString();
+    const formattedDate = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const linesSummaryList = items.map((i, idx) => 
+      `Line ${idx + 1}: ${i.resourceName} (${i.resourceEmail})
+ • Action: ${i.actionTaken}
+ • Claimed: ${i.originalBilledDays} days | Approved: ${i.approvedDays} days
+ • Daily Rate: ${formatCurrency(i.contractDailyRate, currency)} | Financial Value: ${formatCurrency(i.approvedDays * i.contractDailyRate, currency)}
+ • Variance Resolved: ${i.varianceResolved > 0 ? `+${i.varianceResolved}` : i.varianceResolved} days (${formatCurrency(i.financialAmount, currency)})`
+    ).join('\n\n');
+
+    const contentBody = `CONFIRMATION OF RECONCILIATION ACTION
+
+Dear ${approverName},
+
+This automated summary confirms your reconciliation decision submitted on ${formattedDate}.
+
+RECONCILIATION DETAILS:
+ • Purchase Order: ${poNumber}
+ • Supplier: ${vendorName}
+ • Billing Month: ${billingMonth}
+ • Action Executed: ${actionType}
+ • Total Line Items Actioned: ${lineCount}
+ • Total Approved Days: ${totalDaysApproved} days
+ • Total Financial Exposure Impact: ${formatCurrency(totalVariance, currency)}
+ • Recorded Rationale / Justification: "${justification}"
+
+ACTIONED CONSULTANT LINES:
+${linesSummaryList}
+
+STATUS & NEXT STEPS:
+ • An immutable entry has been recorded in the enterprise compliance audit log under your digital signature (${approverEmail}).
+ • If any lines remain pending or under vendor revision, pre-invoice clearance (PICC) will remain gated until all lines achieve complete sign-off.
+ • You can view full batch status in the Manager Approval Queue.
+
+Enterprise Automated Reconciliation Services
+AB Company S2P Financial Governance`;
+
+    const summaryNotif: EmailNotification = {
+      id: `NOTIF-SUMMARY-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      toEmail: approverEmail,
+      toName: approverName,
+      fromEmail: 'reconciliation-desk@abcompany.com',
+      fromName: 'AB Reconciliation Desk',
+      subject: `[Action Summary] Reconciled ${lineCount} line(s) on PO ${poNumber} (${billingMonth})`,
+      previewText: `Summary of your reconciliation decision (${actionType}) for ${lineCount} line(s) on PO ${poNumber}. Justification: "${justification}"`,
+      contentBody,
+      sentAt: nowIso,
+      read: false,
+      poNumber,
+      batchId,
+      discrepanciesCount: lineCount,
+      financialImpact: totalVariance,
+      currency,
+      actionRequiredLink: 'manager'
+    };
+
+    setNotifications(prev => [summaryNotif, ...prev]);
+  };
+
   // Manager Resolves a Discrepancy (Approve Variance, Adjust to Timesheet, or Reject Billing)
   const handleResolveDiscrepancy = (
     batchId: string,
@@ -1047,6 +1173,40 @@ export default function App() {
       },
       ...prev
     ]);
+
+    // Automatically send summary email of actions taken to the manager/approver
+    const targetBatch = targetBatchRef || batches.find(b => b.id === batchId);
+    if (targetBatch && affectedItem) {
+      const item = affectedItem as DiscrepancyItem;
+      const actionLabels: Record<string, string> = {
+        APPROVE_VARIANCE: 'Approved Exception (Full Billed Days)',
+        ADJUST_TO_INTERNAL: 'Adjusted to Internal Approved Timesheet',
+        REJECT_BILLING: 'Rejected Billing Line',
+        APPROVE_ROUTINE: 'Routine Verification Sign-off'
+      };
+
+      sendReconciliationActionSummaryEmail({
+        approverName: currentUser.name,
+        approverEmail: currentUser.email,
+        actionType: actionLabels[action] || action,
+        poNumber: targetBatch.poNumber,
+        billingMonth: targetBatch.billingMonth,
+        vendorName: targetBatch.vendorName,
+        batchId: targetBatch.id,
+        currency: targetBatch.currency,
+        items: [{
+          resourceName: item.resourceName,
+          resourceEmail: item.resourceEmail,
+          originalBilledDays: item.billedDays,
+          approvedDays: item.managerDecision?.finalApprovedDays ?? item.billedDays,
+          contractDailyRate: item.contractDailyRate,
+          varianceResolved: item.daysVariance,
+          financialAmount: item.financialVarianceAmount,
+          actionTaken: actionLabels[action] || action
+        }],
+        justification
+      });
+    }
   };
 
   // Manager 1-Click Routine Matched Lines Sign-Off
@@ -1122,6 +1282,36 @@ export default function App() {
       },
       ...prev
     ]);
+
+    // Automatically send summary email to manager
+    const targetBatch = batches.find(b => b.id === batchId);
+    if (targetBatch) {
+      const routineItems = targetBatch.items
+        .filter(i => itemIds.includes(i.id))
+        .map(i => ({
+          resourceName: i.resourceName,
+          resourceEmail: i.resourceEmail,
+          originalBilledDays: i.billedDays,
+          approvedDays: i.billedDays,
+          contractDailyRate: i.contractDailyRate,
+          varianceResolved: 0,
+          financialAmount: 0,
+          actionTaken: 'Routine Match Approved (1-Click)'
+        }));
+
+      sendReconciliationActionSummaryEmail({
+        approverName: currentUser.name,
+        approverEmail: currentUser.email,
+        actionType: 'Routine Matched Lines Sign-Off',
+        poNumber: targetBatch.poNumber,
+        billingMonth: targetBatch.billingMonth,
+        vendorName: targetBatch.vendorName,
+        batchId: targetBatch.id,
+        currency: targetBatch.currency,
+        items: routineItems,
+        justification: 'Routine internal timesheet verification confirmed.'
+      });
+    }
   };
 
   const handleSaveDelegation = (newDel: ApprovalDelegation) => {
@@ -1167,6 +1357,132 @@ export default function App() {
     ]);
   };
 
+  // Admin reassigns unapproved invoice reconciliation lines to another manager
+  const handleReassignManager = (
+    batchId: string,
+    itemIds: string[],
+    newManagerEmail: string,
+    newManagerName: string,
+    reason: string
+  ) => {
+    let affectedCount = 0;
+    let targetPo = '';
+    let targetMonth = '';
+    let targetVendor = '';
+    let targetCurrency: Currency = currentCurrency || 'USD';
+    let totalImpact = 0;
+    const reassignedItemsDetails: Array<any> = [];
+
+    setBatches(prev => prev.map(batch => {
+      const hasMatchingItem = batch.items.some(i => itemIds.includes(i.id));
+      if (!hasMatchingItem && batch.id !== batchId) return batch;
+
+      if (!targetPo) targetPo = batch.poNumber;
+      if (!targetMonth) targetMonth = batch.billingMonth;
+      if (!targetVendor) targetVendor = batch.vendorName;
+      if (batch.currency) targetCurrency = batch.currency;
+
+      const updatedItems = batch.items.map(item => {
+        if (!itemIds.includes(item.id)) return item;
+        affectedCount++;
+        totalImpact += Math.abs(item.financialVarianceAmount || 0);
+        const oldManagerName = item.managerName;
+        const oldManagerEmail = item.managerEmail;
+
+        reassignedItemsDetails.push({
+          resourceName: item.resourceName,
+          resourceEmail: item.resourceEmail,
+          originalBilledDays: item.billedDays,
+          approvedDays: item.internalApprovedDays,
+          contractDailyRate: item.contractDailyRate,
+          varianceResolved: item.daysVariance,
+          financialAmount: item.financialVarianceAmount,
+          actionTaken: `Reassigned from ${oldManagerName} to ${newManagerName}`
+        });
+
+        return {
+          ...item,
+          managerEmail: newManagerEmail,
+          managerName: newManagerName,
+          auditTrail: [
+            ...(item.auditTrail || []),
+            {
+              id: `AUDIT-REASSIGN-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              timestamp: new Date().toISOString(),
+              actorEmail: currentUser.email,
+              actorName: currentUser.name,
+              action: 'ADMIN_REASSIGNED_MANAGER',
+              notes: `Admin reassigned line from ${oldManagerName} (${oldManagerEmail}) to ${newManagerName} (${newManagerEmail}). Reason: ${reason}`
+            }
+          ]
+        };
+      });
+
+      return {
+        ...batch,
+        items: updatedItems
+      };
+    }));
+
+    const now = new Date().toISOString();
+    setAuditLogs(prev => [
+      {
+        id: `LOG-REASSIGN-${Date.now()}`,
+        timestamp: now,
+        actorEmail: currentUser.email,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        action: 'ADMIN_REASSIGNED_MANAGER',
+        details: `Admin reassigned ${affectedCount} reconciliation line(s) to ${newManagerName} (${newManagerEmail}). Reason: "${reason}"`,
+        poNumber: targetPo,
+        batchId: batchId || undefined
+      },
+      ...prev
+    ]);
+
+    // 1. Notification to the newly assigned manager
+    setNotifications(prev => [
+      {
+        id: `NOTIF-REASSIGN-${Date.now()}`,
+        toEmail: newManagerEmail,
+        toName: newManagerName,
+        fromEmail: currentUser.email,
+        fromName: `${currentUser.name} (Admin)`,
+        subject: `[Reassigned to You] ${affectedCount} Invoice Reconciliation Line(s) for PO ${targetPo || 'Batch'}`,
+        previewText: `Admin has assigned ${affectedCount} invoice reconciliation line(s) to your queue. Reason: ${reason}`,
+        contentBody: `Dear ${newManagerName},\n\nAdmin ${currentUser.name} has transferred review responsibility for ${affectedCount} unapproved invoice reconciliation line(s) to you.\n\nPurchase Order: ${targetPo}\nBilling Period: ${targetMonth}\nReason: ${reason}\n\nPlease sign off or review these items in your Manager Portal.`,
+        sentAt: now,
+        read: false,
+        actionRequiredLink: 'manager',
+        poNumber: targetPo || 'PO-BATCH',
+        batchId: batchId || 'BATCH-1',
+        discrepanciesCount: affectedCount,
+        financialImpact: totalImpact,
+        currency: targetCurrency
+      },
+      ...prev
+    ]);
+
+    // 2. Automated Action Summary email to the Admin who took the action
+    if (affectedCount > 0) {
+      sendReconciliationActionSummaryEmail({
+        approverName: currentUser.name,
+        approverEmail: currentUser.email,
+        actionType: 'Admin Reassignment of Pending Reconciliation Lines',
+        poNumber: targetPo || 'PO-BATCH',
+        billingMonth: targetMonth || 'August 2026',
+        vendorName: targetVendor || 'Apex Global Solutions',
+        batchId: batchId || 'BATCH-1',
+        currency: targetCurrency,
+        items: reassignedItemsDetails,
+        justification: reason
+      });
+    }
+
+    setResyncSuccessToast(`Reassigned ${affectedCount} line(s) to ${newManagerName}!`);
+    setTimeout(() => setResyncSuccessToast(null), 4000);
+  };
+
   const handleBulkResolve = (
     itemIds: string[],
     action: BulkApprovalAction,
@@ -1201,6 +1517,10 @@ export default function App() {
           finalDays = item.internalApprovedDays;
           finalAmount = item.internalApprovedTotalAmount;
           newStatus = 'APPROVED_ROUTINE';
+        } else if (action === 'REJECT_BILLING') {
+          finalDays = 0;
+          finalAmount = 0;
+          newStatus = 'REJECTED_BY_MANAGER';
         }
 
         const decisionAction = action === 'APPROVE_ROUTINE' ? 'APPROVE_ROUTINE' : action;
@@ -1285,6 +1605,54 @@ export default function App() {
       },
       ...prev
     ]);
+
+    // Automatically send summary email of bulk actions to the approver
+    const actionLabels: Record<string, string> = {
+      APPROVE_VARIANCE: 'Approved Exception (Full Billed Days)',
+      ADJUST_TO_INTERNAL: 'Adjusted to Internal Approved Timesheet',
+      REJECT_BILLING: 'Rejected Billing Line',
+      APPROVE_ROUTINE: 'Routine Verification Sign-off'
+    };
+
+    const affectedBatches = batches.filter(b => b.items.some(i => itemIds.includes(i.id)));
+    affectedBatches.forEach(batch => {
+      const batchItems = batch.items
+        .filter(i => itemIds.includes(i.id))
+        .map(item => {
+          let finalDays = item.billedDays;
+          if (action === 'ADJUST_TO_INTERNAL') {
+            finalDays = item.internalApprovedDays;
+          } else if (action === 'REJECT_BILLING') {
+            finalDays = 0;
+          }
+
+          return {
+            resourceName: item.resourceName,
+            resourceEmail: item.resourceEmail,
+            originalBilledDays: item.billedDays,
+            approvedDays: finalDays,
+            contractDailyRate: item.contractDailyRate,
+            varianceResolved: item.daysVariance,
+            financialAmount: item.financialVarianceAmount,
+            actionTaken: actionLabels[action] || action
+          };
+        });
+
+      if (batchItems.length > 0) {
+        sendReconciliationActionSummaryEmail({
+          approverName: currentUser.name,
+          approverEmail: currentUser.email,
+          actionType: `Bulk Action: ${actionLabels[action] || action}`,
+          poNumber: batch.poNumber,
+          billingMonth: batch.billingMonth,
+          vendorName: batch.vendorName,
+          batchId: batch.id,
+          currency: batch.currency,
+          items: batchItems,
+          justification: `${justification}${activeDelegation ? ` (Signed under delegated authority from ${activeDelegation.delegatorName})` : ''}`
+        });
+      }
+    });
   };
 
   const handleAddTimesheet = (newTs: InternalTimesheet) => {
@@ -1453,19 +1821,14 @@ export default function App() {
       }`}>
         
         {/* Brand Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-linear-to-br from-amber-500 via-orange-600 to-indigo-700 rounded-xl flex items-center justify-center font-black text-white shadow-md text-xs tracking-wider ring-1 ring-amber-400/30">
-              INV
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-sm text-sm">
+              R
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-white font-bold tracking-tight text-base leading-tight">INV Engine</span>
-                <span className="text-[9px] font-bold px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-400/40 rounded font-mono tracking-tight" title="Internal Combustion Engine inspired: High-Throughput Reconciliation">
-                  ICE
-                </span>
-              </div>
-              <span className="text-[10px] text-slate-400 block font-medium">Invoice Reconciliation Engine</span>
+              <span className="text-white font-semibold tracking-tight text-sm block">ReconConnect</span>
+              <span className="text-[10px] text-slate-400 font-mono">AB Company Invoicing</span>
             </div>
           </div>
           <button 
@@ -1480,18 +1843,19 @@ export default function App() {
         <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
           {(() => {
             const handleNavigateWithRole = (targetTab: string) => {
-              if (!canAccessTab(currentUser.role, targetTab)) {
+              // Person with vendor/manager profile cannot change their profile to another role. Only Admin can switch roles.
+              if (currentUser.role === 'admin' && !canAccessTab(currentUser.role, targetTab)) {
                 if (targetTab === 'vendor') {
                   const u = SAMPLE_USERS.find(user => user.role === 'vendor') || SAMPLE_USERS[0];
                   setCurrentUser(u);
                 } else if (targetTab === 'manager') {
-                  const u = SAMPLE_USERS.find(user => user.role === 'manager') || SAMPLE_USERS[1];
+                  const u = SAMPLE_USERS.find(user => user.role === 'manager') || SAMPLE_USERS[2];
                   setCurrentUser(u);
                 } else if (targetTab === 'finance' || targetTab === 'database') {
-                  const u = SAMPLE_USERS.find(user => user.role === 'finance' || user.role === 'admin') || SAMPLE_USERS[4];
+                  const u = SAMPLE_USERS.find(user => user.role === 'finance' || user.role === 'admin') || SAMPLE_USERS[5];
                   setCurrentUser(u);
                 } else if (targetTab === 'ariba_validator') {
-                  const u = SAMPLE_USERS.find(user => user.role === 'domain_coo') || SAMPLE_USERS[1];
+                  const u = SAMPLE_USERS.find(user => user.role === 'domain_coo') || SAMPLE_USERS[2];
                   setCurrentUser(u);
                 }
               }
@@ -1777,7 +2141,9 @@ export default function App() {
                   currentCurrency={currentCurrency}
                   timesheets={timesheets}
                   currentBatch={currentBatch}
-                  batches={batches}
+                  batches={currentUser.role === 'vendor' && currentUser.vendorName 
+                    ? batches.filter(b => b.vendorName?.toLowerCase().trim() === currentUser.vendorName!.toLowerCase().trim()) 
+                    : batches}
                   onBatchUpdated={handleBatchUpdated}
                   onInitiateApproval={handleInitiateApproval}
                   onOpenAribaCertificate={(batch) => setSelectedClearanceBatch(batch)}
@@ -1785,8 +2151,8 @@ export default function App() {
                   onNavigateToManager={handleNavigateToManager}
                   onNavigateToNotifications={() => setActiveTab('notifications')}
                   onOpenSendReminder={handleOpenSendReminder}
+                  onSendReminder={handleSendReminder}
                   onOpenPdfReport={handleOpenPdfReport}
-                  onResyncWithTimesheets={handleResyncBatchWithTimesheets}
                 />
               )}
 
@@ -1806,6 +2172,7 @@ export default function App() {
                   onOpenSendReminder={handleOpenSendReminder}
                   onResyncWithTimesheets={handleResyncBatchWithTimesheets}
                   onOpenPdfReport={handleOpenPdfReport}
+                  onReassignManager={handleReassignManager}
                   onSendNotification={(notif) => {
                     setNotifications(prev => [notif, ...prev]);
                   }}

@@ -12,6 +12,14 @@ export const SAMPLE_USERS: UserProfile[] = [
     avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=60'
   },
   {
+    id: 'user-vendor-2',
+    name: 'Emily Watson',
+    email: 'billing@accenture.com',
+    role: 'vendor',
+    vendorName: 'Accenture',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=60'
+  },
+  {
     id: 'user-coo-1',
     name: 'Marcus Sterling',
     email: 'marcus.sterling.coo@abcompany.com',
@@ -217,6 +225,18 @@ export const ACTIVE_PURCHASE_ORDERS: PurchaseOrderInfo[] = [
     description: 'Real-time Telemetry Lakehouse & Predictive Analytics',
     startDate: '2026-03-01',
     endDate: '2026-12-31'
+  },
+  {
+    poNumber: 'PO-AB-2026-5520',
+    vendorName: 'Accenture',
+    vendorEmail: 'billing@accenture.com',
+    department: 'Cloud & Infrastructure Architecture',
+    budgetAllocated: 320000,
+    budgetConsumed: 165000,
+    currency: 'USD',
+    description: 'Enterprise Cloud Security & Infrastructure Engineering SOW-09',
+    startDate: '2026-01-01',
+    endDate: '2026-12-31'
   }
 ];
 
@@ -398,6 +418,54 @@ export const INITIAL_CENTRAL_TIMESHEETS: InternalTimesheet[] = [
     managerName: 'Elena Rostova',
     status: 'Approved',
     lastLoggedDate: '2026-08-31'
+  },
+
+  // Accenture (PO-AB-2026-5520) - Manager: Sarah Jenkins
+  {
+    id: 'TS-2026-009',
+    resourceEmail: 'rachel.adams@accenture.com',
+    resourceName: 'Rachel Adams',
+    poNumber: 'PO-AB-2026-5520',
+    poLineItem: '00010',
+    admSeniority: 'Lead Architect',
+    admRole: 'Security Operations Lead',
+    locationCity: 'Chicago',
+    vendorName: 'Accenture',
+    billingMonth: '2026-08',
+    approvedDays: 20,
+    approvedHours: 160,
+    contractDailyRate: 950,
+    currency: 'USD',
+    projectCode: 'PRJ-SEC-01',
+    projectName: 'SecOps Cloud Engineering',
+    department: 'Cloud & Infrastructure Architecture',
+    managerEmail: 'sarah.jenkins@abcompany.com',
+    managerName: 'Sarah Jenkins',
+    status: 'Approved',
+    lastLoggedDate: '2026-08-31'
+  },
+  {
+    id: 'TS-2026-010',
+    resourceEmail: 'vikram.seth@accenture.com',
+    resourceName: 'Vikram Seth',
+    poNumber: 'PO-AB-2026-5520',
+    poLineItem: '00020',
+    admSeniority: 'Senior Consultant',
+    admRole: 'Cloud Security Engineer',
+    locationCity: 'New York',
+    vendorName: 'Accenture',
+    billingMonth: '2026-08',
+    approvedDays: 19,
+    approvedHours: 152,
+    contractDailyRate: 880,
+    currency: 'USD',
+    projectCode: 'PRJ-SEC-01',
+    projectName: 'SecOps Cloud Engineering',
+    department: 'Cloud & Infrastructure Architecture',
+    managerEmail: 'sarah.jenkins@abcompany.com',
+    managerName: 'Sarah Jenkins',
+    status: 'Approved',
+    lastLoggedDate: '2026-08-31'
   }
 ];
 
@@ -487,6 +555,38 @@ export const SAMPLE_VENDOR_INVOICE_ROWS: { [poNumber: string]: any[] } = {
       claimedDailyRate: 850,
       currency: 'USD',
       lineItemDescription: 'Emergency incident response contractor'
+    }
+  ],
+  'PO-AB-2026-5520': [
+    {
+      resourceEmail: 'rachel.adams@accenture.com',
+      resourceName: 'Rachel Adams',
+      poNumber: 'PO-AB-2026-5520',
+      poLineItem: '00010',
+      admSeniority: 'Lead Architect',
+      admRole: 'Security Operations Lead',
+      locationCity: 'Chicago',
+      billingMonth: '2026-08',
+      billedDays: 20,
+      claimedDailyRate: 950,
+      currency: 'USD',
+      lineItemDescription: 'Enterprise Cloud Security Architecture Assessment',
+      vendorName: 'Accenture'
+    },
+    {
+      resourceEmail: 'vikram.seth@accenture.com',
+      resourceName: 'Vikram Seth',
+      poNumber: 'PO-AB-2026-5520',
+      poLineItem: '00020',
+      admSeniority: 'Senior Consultant',
+      admRole: 'Cloud Security Engineer',
+      locationCity: 'New York',
+      billingMonth: '2026-08',
+      billedDays: 22,
+      claimedDailyRate: 880,
+      currency: 'USD',
+      lineItemDescription: 'IAM Policy hardening & Zero-Trust sprint deliverables',
+      vendorName: 'Accenture'
     }
   ]
 };

@@ -51,16 +51,17 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
   // Determine available audiences based on user role
   const getDefaultAudience = (): 'EVERYONE' | 'ALL_MANAGERS' | 'ALL_VENDORS' | 'SPECIFIC_MANAGER' | 'SPECIFIC_VENDOR' => {
     if (initialTargetAudience) return initialTargetAudience;
+    if (initialItem?.managerEmail || initialRecipientEmail) return 'SPECIFIC_MANAGER';
     if (isAdmin) return 'EVERYONE';
-    if (isVendor) return initialRecipientEmail ? 'SPECIFIC_MANAGER' : 'ALL_MANAGERS';
+    if (isVendor) return 'ALL_MANAGERS';
     if (isManager) return 'SPECIFIC_VENDOR';
     return 'EVERYONE';
   };
 
   const [targetAudience, setTargetAudience] = useState<'EVERYONE' | 'ALL_MANAGERS' | 'ALL_VENDORS' | 'SPECIFIC_MANAGER' | 'SPECIFIC_VENDOR'>(getDefaultAudience());
-  const [selectedPo, setSelectedPo] = useState<string>(initialPoNumber || batches[0]?.poNumber || 'PO-AB-2026-8941');
+  const [selectedPo, setSelectedPo] = useState<string>(initialPoNumber || initialItem?.poNumber || batches[0]?.poNumber || 'PO-AB-2026-8941');
   const [selectedBatchId, setSelectedBatchId] = useState<string>(initialBatchId || batches[0]?.id || '');
-  const [specificEmail, setSpecificEmail] = useState<string>(initialRecipientEmail || '');
+  const [specificEmail, setSpecificEmail] = useState<string>(initialItem?.managerEmail || initialRecipientEmail || '');
   const [urgency, setUrgency] = useState<'NORMAL' | 'URGENT' | 'CRITICAL'>('URGENT');
   const [subject, setSubject] = useState<string>('');
   const [message, setMessage] = useState<string>('');
@@ -70,16 +71,19 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
   const managers = SAMPLE_USERS.filter(u => u.role === 'manager');
   const vendors = SAMPLE_USERS.filter(u => u.role === 'vendor');
 
-  // Set default specific recipient if needed
+  // Set default specific recipient and sync when props change
   useEffect(() => {
-    if (initialRecipientEmail) {
+    if (initialItem?.managerEmail) {
+      setSpecificEmail(initialItem.managerEmail);
+      setTargetAudience('SPECIFIC_MANAGER');
+    } else if (initialRecipientEmail) {
       setSpecificEmail(initialRecipientEmail);
     } else if (targetAudience === 'SPECIFIC_MANAGER' && !specificEmail) {
       setSpecificEmail(managers[0]?.email || 'sarah.jenkins@abcompany.com');
     } else if (targetAudience === 'SPECIFIC_VENDOR' && !specificEmail) {
       setSpecificEmail(vendors[0]?.email || 'billing@apex-tech.com');
     }
-  }, [targetAudience, initialRecipientEmail, specificEmail, managers, vendors]);
+  }, [targetAudience, initialRecipientEmail, initialItem, specificEmail, managers, vendors]);
 
   // Dynamic template presets based on sender role and target
   const getPresets = () => {
@@ -107,11 +111,21 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
     }
 
     if (isVendor) {
+      const itemPresets = initialItem ? [
+        {
+          label: `Nudge for ${initialItem.resourceName}`,
+          subject: `[Priority Nudge] Timesheet Authorization: ${initialItem.resourceName} (${selectedPo} Line ${initialItem.poLineItem})`,
+          message: `Dear ${initialItem.managerName || 'Resource Manager'},\n\nWe would appreciate your prompt review and sign-off on the consultant timesheet record for:\n\n• Consultant: ${initialItem.resourceName} (${initialItem.admRole || initialItem.role || 'Consultant'})\n• Purchase Order: ${selectedPo} (Line Item: ${initialItem.poLineItem})\n• Billed Days: ${initialItem.billedDays} days\n• Approved Timesheet: ${initialItem.internalApprovedDays} days\n• Current Status: ${initialItem.status === 'REJECTED_BY_MANAGER' ? 'Correction Resubmitted by Vendor' : 'Awaiting Manager Authorization'}\n\nPlease review and authorize this line in your Manager Authorization Queue so that our monthly invoice clearance can be finalized without payment delay.\n\nThank you,\n${currentUser.name} (${currentUser.vendorName || 'Apex Accounts Receivable'})`,
+          urgency: 'URGENT' as const
+        }
+      ] : [];
+
       return [
+        ...itemPresets,
         {
           label: 'Pending Discrepancy Authorization',
           subject: `Reminder: Action Required on ${selectedPo} - Consultant Timesheet Approvals Awaiting Sign-off`,
-          message: `Dear Resource Manager,\n\nWe have submitted our consulting invoice reconciliation for ${selectedPo}. Several line items are currently flagged for your authorization. Kindly sign off or provide resolution so that our Pre-Invoice Clearance Certificate (PICC) can be generated before the SAP Ariba billing cycle locks.\n\nThank you,\n${currentUser.name} (Apex Accounts Receivable)`,
+          message: `Dear Resource Manager,\n\nWe have submitted our consulting invoice reconciliation for ${selectedPo}. Several line items are currently flagged for your authorization. Kindly sign off or provide resolution so that our Pre-Invoice Clearance Certificate (PICC) can be generated before the monthly billing cycle locks.\n\nThank you,\n${currentUser.name} (${currentUser.vendorName || 'Apex Accounts Receivable'})`,
           urgency: 'URGENT' as const
         },
         {
@@ -161,14 +175,18 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
     setUrgency(p.urgency);
   };
 
-  // Initial populate if empty
+  // Initial populate or populate when initialItem changes
   useEffect(() => {
-    if (!subject && presets.length > 0) {
+    if (initialItem && presets.length > 0) {
+      setSubject(presets[0].subject);
+      setMessage(presets[0].message);
+      setUrgency(presets[0].urgency);
+    } else if (!subject && presets.length > 0) {
       setSubject(presets[0].subject);
       setMessage(presets[0].message);
       setUrgency(presets[0].urgency);
     }
-  }, [presets, subject]);
+  }, [initialItem, presets.length]);
 
   if (!isOpen) return null;
 
@@ -303,6 +321,31 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Contextual Nudge Target Banner (when triggered for a specific consultant line item) */}
+            {initialItem && (
+              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                    <BellRing className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-900 text-xs flex items-center gap-2">
+                      <span>Line Item Direct Nudge: {initialItem.resourceName}</span>
+                      <span className="px-1.5 py-0.5 bg-amber-200/80 text-amber-900 rounded font-mono font-bold text-[10px]">
+                        Line {initialItem.poLineItem}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-600 mt-0.5">
+                      Target Manager: <strong className="text-slate-800">{initialItem.managerName}</strong> ({initialItem.managerEmail}) • PO: <strong>{selectedPo}</strong>
+                    </div>
+                  </div>
+                </div>
+                <span className="px-2 py-1 bg-amber-100 text-amber-900 text-[11px] font-semibold rounded-md border border-amber-200 shrink-0">
+                  {initialItem.status === 'REJECTED_BY_MANAGER' ? 'Resubmitted for Review' : 'Pending Authorization'}
+                </span>
+              </div>
+            )}
 
             {/* Recipient / Audience Configuration */}
             <div className="space-y-2">

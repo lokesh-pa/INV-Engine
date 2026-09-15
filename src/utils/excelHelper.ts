@@ -238,92 +238,129 @@ export function downloadTimesheetDatabaseTemplate(poNumber: string = 'PO-AB-2026
  * Generates and triggers download of an official Excel Template for vendors.
  */
 export function downloadVendorInvoiceTemplate(poNumber: string = 'PO-AB-2026-8941', currency: Currency = 'USD') {
-  const templateData = [
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00010',
-      'Resource Email ID': 'alex.rivas@apexconsulting.com',
-      'Resource Name': 'Alex Rivas',
-      'ADM Seniority': 'Lead Architect',
-      'ADM Role': 'Cloud Solutions Architect',
-      'Resource Location (City)': 'Chicago',
-      'Billing Month': '2026-08',
-      'Billed Days': 20,
-      'Daily Rate': 850,
-      'Currency': currency,
-      'Line Item Description': 'Kubernetes multi-region deployment'
-    },
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00020',
-      'Resource Email ID': 'priya.nair@apexconsulting.com',
-      'Resource Name': 'Priya Nair',
-      'ADM Seniority': 'Senior Consultant',
-      'ADM Role': 'Zero-Trust Security Engineer',
-      'Resource Location (City)': 'San Francisco',
-      'Billing Month': '2026-08',
-      'Billed Days': 22,
-      'Daily Rate': 920,
-      'Currency': currency,
-      'Line Item Description': 'Zero-Trust IAM integration sprint'
-    },
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00030',
-      'Resource Email ID': 'marcus.foster@apexconsulting.com',
-      'Resource Name': 'Marcus Foster',
-      'ADM Seniority': 'Principal SRE',
-      'ADM Role': 'DevOps & Platform Automation Lead',
-      'Resource Location (City)': 'New York',
-      'Billing Month': '2026-08',
-      'Billed Days': 21,
-      'Daily Rate': 780,
-      'Currency': currency,
-      'Line Item Description': 'Terraform infrastructure as code module testing'
-    },
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00040',
-      'Resource Email ID': 'lucas.silva@apexconsulting.com',
-      'Resource Name': 'Lucas Silva',
-      'ADM Seniority': 'Staff Consultant',
-      'ADM Role': 'Container Runtime Engineer',
-      'Resource Location (City)': 'Austin',
-      'Billing Month': '2026-08',
-      'Billed Days': 15,
-      'Daily Rate': 900,
-      'Currency': currency,
-      'Line Item Description': 'Container runtime optimization'
-    },
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00050',
-      'Resource Email ID': 'ananya.iyer@apexconsulting.com',
-      'Resource Name': 'Ananya Iyer',
-      'ADM Seniority': 'Senior Specialist',
-      'ADM Role': 'Cloud SecOps & Remediation Engineer',
-      'Resource Location (City)': 'Seattle',
-      'Billing Month': '2026-08',
-      'Billed Days': 22,
-      'Daily Rate': 880,
-      'Currency': currency,
-      'Line Item Description': 'Security vulnerability remediation'
-    },
-    {
-      'Purchase Order Number': poNumber,
-      'PO Line Item': '00060',
-      'Resource Email ID': 'unmapped.contractor@apexconsulting.com',
-      'Resource Name': 'Darren Hayes',
-      'ADM Seniority': 'Lead Consultant',
-      'ADM Role': 'Emergency Incident Response Engineer',
-      'Resource Location (City)': 'London',
-      'Billing Month': '2026-08',
-      'Billed Days': 12,
-      'Daily Rate': 850,
-      'Currency': currency,
-      'Line Item Description': 'Emergency incident response contractor'
-    }
-  ];
+  let templateData: any[] = [];
+
+  if (poNumber === 'PO-AB-2026-5520') {
+    // Accenture template
+    templateData = [
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00010',
+        'Resource Email ID': 'rachel.adams@accenture.com',
+        'Resource Name': 'Rachel Adams',
+        'ADM Seniority': 'Lead Architect',
+        'ADM Role': 'Security Operations Lead',
+        'Resource Location (City)': 'Chicago',
+        'Billing Month': '2026-08',
+        'Billed Days': 20,
+        'Daily Rate': 950,
+        'Currency': currency,
+        'Line Item Description': 'Enterprise Cloud Security Architecture Assessment'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00020',
+        'Resource Email ID': 'vikram.seth@accenture.com',
+        'Resource Name': 'Vikram Seth',
+        'ADM Seniority': 'Senior Consultant',
+        'ADM Role': 'Cloud Security Engineer',
+        'Resource Location (City)': 'New York',
+        'Billing Month': '2026-08',
+        'Billed Days': 19,
+        'Daily Rate': 880,
+        'Currency': currency,
+        'Line Item Description': 'IAM Policy hardening sprint deliverables'
+      }
+    ];
+  } else {
+    // Apex Global Solutions default
+    templateData = [
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00010',
+        'Resource Email ID': 'alex.rivas@apexconsulting.com',
+        'Resource Name': 'Alex Rivas',
+        'ADM Seniority': 'Lead Architect',
+        'ADM Role': 'Cloud Solutions Architect',
+        'Resource Location (City)': 'Chicago',
+        'Billing Month': '2026-08',
+        'Billed Days': 20,
+        'Daily Rate': 850,
+        'Currency': currency,
+        'Line Item Description': 'Kubernetes multi-region deployment'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00020',
+        'Resource Email ID': 'priya.nair@apexconsulting.com',
+        'Resource Name': 'Priya Nair',
+        'ADM Seniority': 'Senior Consultant',
+        'ADM Role': 'Zero-Trust Security Engineer',
+        'Resource Location (City)': 'San Francisco',
+        'Billing Month': '2026-08',
+        'Billed Days': 22,
+        'Daily Rate': 920,
+        'Currency': currency,
+        'Line Item Description': 'Zero-Trust IAM integration sprint'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00030',
+        'Resource Email ID': 'marcus.foster@apexconsulting.com',
+        'Resource Name': 'Marcus Foster',
+        'ADM Seniority': 'Principal SRE',
+        'ADM Role': 'DevOps & Platform Automation Lead',
+        'Resource Location (City)': 'New York',
+        'Billing Month': '2026-08',
+        'Billed Days': 21,
+        'Daily Rate': 780,
+        'Currency': currency,
+        'Line Item Description': 'Terraform infrastructure as code module testing'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00040',
+        'Resource Email ID': 'lucas.silva@apexconsulting.com',
+        'Resource Name': 'Lucas Silva',
+        'ADM Seniority': 'Staff Consultant',
+        'ADM Role': 'Container Runtime Engineer',
+        'Resource Location (City)': 'Austin',
+        'Billing Month': '2026-08',
+        'Billed Days': 15,
+        'Daily Rate': 900,
+        'Currency': currency,
+        'Line Item Description': 'Container runtime optimization'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00050',
+        'Resource Email ID': 'ananya.iyer@apexconsulting.com',
+        'Resource Name': 'Ananya Iyer',
+        'ADM Seniority': 'Senior Specialist',
+        'ADM Role': 'Cloud SecOps & Remediation Engineer',
+        'Resource Location (City)': 'Seattle',
+        'Billing Month': '2026-08',
+        'Billed Days': 22,
+        'Daily Rate': 880,
+        'Currency': currency,
+        'Line Item Description': 'Security vulnerability remediation'
+      },
+      {
+        'Purchase Order Number': poNumber,
+        'PO Line Item': '00060',
+        'Resource Email ID': 'unmapped.contractor@apexconsulting.com',
+        'Resource Name': 'Darren Hayes',
+        'ADM Seniority': 'Lead Consultant',
+        'ADM Role': 'Emergency Incident Response Engineer',
+        'Resource Location (City)': 'London',
+        'Billing Month': '2026-08',
+        'Billed Days': 12,
+        'Daily Rate': 850,
+        'Currency': currency,
+        'Line Item Description': 'Emergency incident response contractor'
+      }
+    ];
+  }
 
   const worksheet = XLSX.utils.json_to_sheet(templateData);
 
@@ -549,5 +586,114 @@ export function exportToJSON(data: any, filenamePrefix: string = 'Reconciliation
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+/**
+ * Generates and downloads a complete side-by-side Comparison & Variance Report
+ * comparing the vendor's commercial invoice submission against AB Company's internal timesheet records.
+ */
+export function downloadComparisonReport(batch: any, currency: Currency = 'USD') {
+  if (!batch || !batch.items) return;
+
+  const wb = XLSX.utils.book_new();
+
+  // 1. Row-by-row Side-by-Side Comparison
+  const comparisonRows = batch.items.map((item: any, idx: number) => {
+    const daysDiff = (item.billedDays || 0) - (item.internalApprovedDays || 0);
+    const amountDiff = (item.billedTotalAmount || 0) - (item.internalApprovedTotalAmount || 0);
+    
+    let clearanceDecision = 'Pending Review';
+    if (item.status === 'APPROVED_ROUTINE' || item.status === 'AUTO_MATCHED') {
+      clearanceDecision = 'Approved (100% Match)';
+    } else if (item.status === 'APPROVED_BY_MANAGER') {
+      clearanceDecision = `Approved by Manager (${item.managerDecision?.notes || 'Exception Authorized'})`;
+    } else if (item.status === 'CAPPED_TO_TIMESHEET') {
+      clearanceDecision = `Capped to AB Timesheet (${item.internalApprovedDays} Days)`;
+    } else if (item.status === 'REJECTED_BY_MANAGER') {
+      clearanceDecision = `Rejected by Manager (${item.managerDecision?.notes || 'Revision Required'})`;
+    }
+
+    return {
+      'Line #': idx + 1,
+      'Resource Name': item.resourceName || 'Unknown Resource',
+      'Resource Email': item.resourceEmail || 'N/A',
+      'PO Number': item.poNumber || batch.poNumber,
+      'PO Line Item': item.poLineItem || 'Line 10',
+      'ADM Role': item.role || item.admRole || 'Consultant',
+      'City / Location': item.locationCity || item.city || 'N/A',
+      'Billing Month': item.billingMonth || batch.billingMonth,
+      // Vendor Submission
+      'Vendor Billed Days': item.billedDays ?? 0,
+      [`Vendor Rate (${currency})`]: item.claimedDailyRate ?? 0,
+      [`Vendor Claimed Total (${currency})`]: item.billedTotalAmount ?? 0,
+      // AB Company Internal Records
+      'AB Approved Days': item.internalApprovedDays ?? 0,
+      [`AB Contract Rate (${currency})`]: item.contractDailyRate ?? 0,
+      [`AB Approved Total (${currency})`]: item.internalApprovedTotalAmount ?? 0,
+      // Variance
+      'Days Variance': daysDiff > 0 ? `+${daysDiff.toFixed(1)}` : daysDiff.toFixed(1),
+      [`Amount Variance (${currency})`]: amountDiff > 0 ? `+${amountDiff.toFixed(2)}` : amountDiff.toFixed(2),
+      'Reconciliation Status': item.discrepancyType || (item.daysVariance > 0 ? 'DAYS_OVERBILLED' : 'PERFECT_MATCH'),
+      'Workflow Status': item.status,
+      'Clearance Decision': clearanceDecision,
+      'Responsible Manager': item.managerName ? `${item.managerName} (${item.managerEmail})` : 'N/A',
+      'Manager Decision Notes': item.managerDecision?.notes || 'None'
+    };
+  });
+
+  const wsComparison = XLSX.utils.json_to_sheet(comparisonRows);
+  wsComparison['!cols'] = [
+    { wch: 8 },  // Line #
+    { wch: 22 }, // Resource Name
+    { wch: 26 }, // Email
+    { wch: 18 }, // PO
+    { wch: 14 }, // PO Line
+    { wch: 22 }, // Role
+    { wch: 15 }, // City
+    { wch: 14 }, // Month
+    { wch: 18 }, // Vendor Days
+    { wch: 18 }, // Vendor Rate
+    { wch: 22 }, // Vendor Claimed
+    { wch: 18 }, // AB Days
+    { wch: 18 }, // AB Rate
+    { wch: 22 }, // AB Total
+    { wch: 16 }, // Days Var
+    { wch: 20 }, // Amt Var
+    { wch: 24 }, // Recon Status
+    { wch: 24 }, // Workflow
+    { wch: 32 }, // Clearance
+    { wch: 30 }, // Manager
+    { wch: 40 }, // Notes
+  ];
+  XLSX.utils.book_append_sheet(wb, wsComparison, 'Submission_vs_AB_Comparison');
+
+  // 2. Summary Sheet
+  const totalBilled = batch.items.reduce((s: number, i: any) => s + (i.billedTotalAmount || 0), 0);
+  const totalApproved = batch.items.reduce((s: number, i: any) => s + (i.internalApprovedTotalAmount || 0), 0);
+  const totalVariance = totalBilled - totalApproved;
+  const matchedLines = batch.items.filter((i: any) => i.discrepancyType === 'PERFECT_MATCH' || (!i.daysVariance && !i.rateVariance)).length;
+
+  const summarySheetData = [
+    { 'Reconciliation Metric': 'Purchase Order (PO)', 'Value': batch.poNumber },
+    { 'Reconciliation Metric': 'Vendor Partner', 'Value': batch.vendorName },
+    { 'Reconciliation Metric': 'Billing Month', 'Value': batch.billingMonth },
+    { 'Reconciliation Metric': 'Settlement Currency', 'Value': currency },
+    { 'Reconciliation Metric': 'Total Resources Billed', 'Value': batch.items.length },
+    { 'Reconciliation Metric': '100% Matched Lines', 'Value': matchedLines },
+    { 'Reconciliation Metric': 'Lines with Variance', 'Value': batch.items.length - matchedLines },
+    { 'Reconciliation Metric': `Total Vendor Submission (${currency})`, 'Value': totalBilled.toFixed(2) },
+    { 'Reconciliation Metric': `Total AB Approved Amount (${currency})`, 'Value': totalApproved.toFixed(2) },
+    { 'Reconciliation Metric': `Net Variance (${currency})`, 'Value': totalVariance.toFixed(2) },
+    { 'Reconciliation Metric': 'Overall Batch Status', 'Value': batch.status },
+    { 'Reconciliation Metric': 'PICC Clearance Code', 'Value': batch.clearanceCertificate?.aribaSubmissionCode || 'Awaiting Sign-off' },
+    { 'Reconciliation Metric': 'Comparison Export Date', 'Value': new Date().toISOString() }
+  ];
+
+  const wsSummary = XLSX.utils.json_to_sheet(summarySheetData);
+  wsSummary['!cols'] = [{ wch: 36 }, { wch: 45 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary_Metrics');
+
+  const fileName = `Comparison_Variance_${batch.poNumber}_${batch.billingMonth}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(wb, fileName);
 }
 

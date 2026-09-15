@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   UserCheck, 
   CheckCircle2, 
@@ -24,7 +24,10 @@ import {
   ArrowDown,
   ArrowUp,
   BellRing,
-  RefreshCw
+  RefreshCw,
+  Lock,
+  Building2,
+  Filter
 } from 'lucide-react';
 import { 
   InvoiceBatch, 
@@ -70,6 +73,7 @@ interface ManagerPortalProps {
   onResyncWithTimesheets?: (batchId?: string) => void;
   onOpenPdfReport?: (batch: InvoiceBatch) => void;
   onSendNotification?: (notification: any) => void;
+  onReassignManager?: (batchId: string, itemIds: string[], newManagerEmail: string, newManagerName: string, reason: string) => void;
 }
 
 export const ManagerPortal: React.FC<ManagerPortalProps> = ({
@@ -87,7 +91,8 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   onOpenSendReminder,
   onResyncWithTimesheets,
   onOpenPdfReport,
-  onSendNotification
+  onSendNotification,
+  onReassignManager
 }) => {
   const [selectedItemForReview, setSelectedItemForReview] = useState<{
     batch: InvoiceBatch;
@@ -98,8 +103,21 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   const [reviewAction, setReviewAction] = useState<'APPROVE_VARIANCE' | 'ADJUST_TO_INTERNAL' | 'REJECT_BILLING'>('APPROVE_VARIANCE');
   const [showAllManagersToggle, setShowAllManagersToggle] = useState<boolean>(false);
   const [activeQueueTab, setActiveQueueTab] = useState<'discrepancies' | 'matches' | 'resubmissions'>('discrepancies');
-  const [showDistributionChart, setShowDistributionChart] = useState<boolean>(true);
+  // Manager Review Dashboard including Reanalytics is closed by default per user request
+  const [showReviewDashboard, setShowReviewDashboard] = useState<boolean>(false);
+  const [supplierFilter, setSupplierFilter] = useState<string>('ALL');
   const [modalValidationMsg, setModalValidationMsg] = useState<string>('');
+
+  // Admin Reassignment Modal State
+  const [reassignModalData, setReassignModalData] = useState<{
+    batchId: string;
+    itemIds: string[];
+    currentManager: string;
+    currentManagerEmail: string;
+    resourceName: string;
+  } | null>(null);
+  const [selectedTargetManagerEmail, setSelectedTargetManagerEmail] = useState<string>('david.chen@abcompany.com');
+  const [reassignmentReason, setReassignmentReason] = useState<string>('Manager on leave / sprint realignment.');
 
   // Smooth scroll helpers so managers can never get stuck
   const scrollToApprovalQueue = () => {
@@ -137,6 +155,9 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   const [showBulkModal, setShowBulkModal] = useState<boolean>(false);
   const [bulkModalAction, setBulkModalAction] = useState<BulkApprovalAction>('APPROVE_VARIANCE');
 
+  // Primary Queue Mode: Action Required (Pending) vs Actioned History (Resolved)
+  const [queueMainTab, setQueueMainTab] = useState<'ACTION_REQUIRED' | 'ACTIONED_HISTORY'>('ACTION_REQUIRED');
+
   // Modal State
   const [showDelegationModal, setShowDelegationModal] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
@@ -157,6 +178,42 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
 
   const delegatedManagerEmails = activeIncomingDelegations.map(d => d.delegatorEmail.toLowerCase());
 
+  // Historical audit lookup for repeated resources across all batches/cycles
+  const resourceHistoryMap = useMemo(() => {
+    const map = new Map<string, Array<{
+      batchPo: string;
+      billingMonth: string;
+      action: string;
+      approvedDays: number;
+      dateStr: string;
+    }>>();
+
+    batches.forEach(b => {
+      b.items.forEach(it => {
+        if (it.managerDecision || it.status === 'APPROVED_WITH_EXCEPTION' || it.status === 'ADJUSTED_TO_TIMESHEET' || it.status === 'APPROVED_ROUTINE' || it.status === 'REJECTED_BY_MANAGER') {
+          const key = (it.resourceEmail || it.resourceName).toLowerCase().trim();
+          if (!map.has(key)) map.set(key, []);
+          const isExc = it.managerDecision?.action === 'APPROVE_VARIANCE' || it.status === 'APPROVED_WITH_EXCEPTION';
+          const isAdj = it.managerDecision?.action === 'ADJUST_TO_INTERNAL' || it.status === 'ADJUSTED_TO_TIMESHEET';
+          const isRej = it.managerDecision?.action === 'REJECT_BILLING' || it.status === 'REJECTED_BY_MANAGER';
+          
+          const actionLabel = isExc ? 'Approved Exception' : isAdj ? 'Capped to DB Timesheet' : isRej ? 'Rejected' : 'Approved Match';
+          const days = it.managerDecision?.finalApprovedDays ?? (isAdj ? it.internalApprovedDays : it.billedDays);
+          
+          map.get(key)!.push({
+            batchPo: b.poNumber,
+            billingMonth: b.billingMonth,
+            action: actionLabel,
+            approvedDays: days,
+            dateStr: it.managerDecision?.decidedAt ? new Date(it.managerDecision.decidedAt).toLocaleDateString() : b.billingMonth
+          });
+        }
+      });
+    });
+
+    return map;
+  }, [batches]);
+
   // Collect all items across batches
   const allItems: { batch: InvoiceBatch; item: DiscrepancyItem }[] = [];
   batches.forEach(batch => {
@@ -165,9 +222,30 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
     });
   });
 
-  // Filter for this manager or delegated authority (including Domain COO)
-  const managerItems = allItems.filter(({ item }) => {
-    if (showAllManagersToggle) return true;
+  // Unique list of suppliers across all items for the supplier filter
+  const availableSuppliers = useMemo(() => {
+    const suppliers = new Set<string>();
+    allItems.forEach(({ batch, item }) => {
+      const vendor = item.vendorName || batch.vendorName;
+      if (vendor) suppliers.add(vendor);
+    });
+    return Array.from(suppliers).sort();
+  }, [allItems]);
+
+  // Filter for this manager or delegated authority and supplier filter (strictly enforced)
+  const managerItems = allItems.filter(({ batch, item }) => {
+    // Supplier filter
+    if (supplierFilter !== 'ALL') {
+      const vendor = (item.vendorName || batch.vendorName || '').toLowerCase().trim();
+      if (vendor !== supplierFilter.toLowerCase().trim()) {
+        return false;
+      }
+    }
+
+    // Only Admin can use the show all toggle
+    if (currentUser.role === 'admin' && showAllManagersToggle) {
+      return true;
+    }
 
     // Check if Domain COO has executive delegated oversight
     if (currentUser.role === 'domain_coo') {
@@ -179,6 +257,7 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
       return true; // Domain COO can oversee domain or all
     }
 
+    // For managers: STRICTLY only see resources they are direct managers of, or that have been delegated to them
     const isDirectManager = item.managerEmail.toLowerCase() === currentUser.email.toLowerCase();
     const isDelegatedManager = delegatedManagerEmails.includes(item.managerEmail.toLowerCase());
 
@@ -191,31 +270,45 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
     return isDirectManager || isDelegatedManager;
   });
 
-  // Discrepancy items (both pending, rejected, resubmitted, and resolved)
-  const managerDiscrepancies = managerItems.filter(({ item }) => item.discrepancyType !== 'PERFECT_MATCH');
+  // Discrepancy items (pending vs actioned history)
+  const pendingDiscrepancies = managerItems.filter(
+    ({ item }) => item.discrepancyType !== 'PERFECT_MATCH' && !item.managerDecision && item.status !== 'REJECTED_BY_MANAGER'
+  );
+  const actionedDiscrepancies = managerItems.filter(
+    ({ item }) => item.discrepancyType !== 'PERFECT_MATCH' && (!!item.managerDecision || item.status === 'REJECTED_BY_MANAGER')
+  );
+  const displayedDiscrepancies = queueMainTab === 'ACTION_REQUIRED' ? pendingDiscrepancies : actionedDiscrepancies;
   
-  // Resubmitted items (corrected by vendor after rejection)
+  // Resubmitted items (pending review vs actioned)
   const managerResubmissions = managerItems.filter(({ item }) => item.status === 'RESUBMITTED_FOR_REVIEW');
+  const pendingResubmissions = managerResubmissions.filter(({ item }) => !item.managerDecision);
+  const actionedResubmissions = managerResubmissions.filter(({ item }) => !!item.managerDecision);
+  const displayedResubmissions = queueMainTab === 'ACTION_REQUIRED' ? pendingResubmissions : actionedResubmissions;
 
-  // Routine matched items
+  // Routine matched items (pending sign-off vs actioned)
   const managerMatches = managerItems.filter(({ item }) => item.discrepancyType === 'PERFECT_MATCH');
+  const pendingMatches = managerMatches.filter(
+    ({ item }) => item.status === 'PENDING_ROUTINE_APPROVAL' || (!item.managerDecision && item.status !== 'APPROVED_ROUTINE')
+  );
+  const actionedMatches = managerMatches.filter(
+    ({ item }) => item.status === 'APPROVED_ROUTINE' || !!item.managerDecision
+  );
+  const displayedMatches = queueMainTab === 'ACTION_REQUIRED' ? pendingMatches : actionedMatches;
 
-  const pendingDiscrepanciesCount = managerDiscrepancies.filter(
-    ({ item }) => !item.managerDecision && item.status !== 'REJECTED_BY_MANAGER'
-  ).length;
+  const pendingDiscrepanciesCount = pendingDiscrepancies.length;
+  const actionedDiscrepanciesCount = actionedDiscrepancies.length;
 
-  const rejectedCount = managerDiscrepancies.filter(
+  const rejectedCount = managerItems.filter(
     ({ item }) => item.status === 'REJECTED_BY_MANAGER'
   ).length;
 
-  const resubmissionsCount = managerResubmissions.length;
-  
-  const pendingMatchesCount = managerMatches.filter(
-    ({ item }) => item.status === 'PENDING_ROUTINE_APPROVAL' || (!item.managerDecision && item.status !== 'APPROVED_ROUTINE')
-  ).length;
+  const resubmissionsCount = pendingResubmissions.length;
+  const pendingMatchesCount = pendingMatches.length;
 
-  const totalExposure = managerDiscrepancies
-    .filter(({ item }) => !item.managerDecision)
+  const totalPendingActionCount = pendingDiscrepanciesCount + resubmissionsCount + pendingMatchesCount;
+  const totalActionedHistoryCount = actionedDiscrepanciesCount + actionedResubmissions.length + actionedMatches.length;
+
+  const totalExposure = pendingDiscrepancies
     .reduce((sum, { item }) => sum + Math.max(0, item.financialVarianceAmount), 0);
 
   const canApprove = hasPermission(currentUser.role, 'APPROVE_DISCREPANCIES');
@@ -223,10 +316,10 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
   // Items visible in current queue tab
   const currentTabItems: DiscrepancyItem[] = 
     activeQueueTab === 'discrepancies' 
-      ? managerDiscrepancies.map(x => x.item)
+      ? displayedDiscrepancies.map(x => x.item)
       : activeQueueTab === 'resubmissions'
-      ? managerResubmissions.map(x => x.item)
-      : managerMatches.map(x => x.item);
+      ? displayedResubmissions.map(x => x.item)
+      : displayedMatches.map(x => x.item);
 
   const isAllCurrentSelected = 
     currentTabItems.length > 0 && currentTabItems.every(i => selectedItemIds.has(i.id));
@@ -427,33 +520,56 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
               </button>
             )}
 
-            {/* Manager Switcher */}
-            <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
-              <label className="text-xs text-slate-500 font-medium hidden sm:inline">Viewing as:</label>
-              <select
-                value={currentUser.id}
-                onChange={(e) => {
-                  const found = SAMPLE_USERS.find(u => u.id === e.target.value);
-                  if (found) onSelectManager(found);
-                }}
-                className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="user-manager-1">Sarah Jenkins (Cloud Platform)</option>
-                <option value="user-manager-2">David Chen (Core Apps)</option>
-                <option value="user-manager-3">Elena Rostova (Data Platforms)</option>
-              </select>
-            </div>
+            {/* Manager Identity & Switcher (Only Admin has access to switch roles or toggle all managers) */}
+            {currentUser.role === 'admin' ? (
+              <>
+                <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+                  <label className="text-xs text-slate-500 font-medium hidden sm:inline">Admin Audit View:</label>
+                  <select
+                    id="admin-manager-filter-select"
+                    value={currentUser.id}
+                    onChange={(e) => {
+                      const found = SAMPLE_USERS.find(u => u.id === e.target.value);
+                      if (found) onSelectManager(found);
+                    }}
+                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="user-manager-1">Sarah Jenkins (Cloud Platform)</option>
+                    <option value="user-manager-2">David Chen (Core Apps)</option>
+                    <option value="user-manager-3">Elena Rostova (Data Platforms)</option>
+                  </select>
+                </div>
 
-            <button
-              onClick={() => setShowAllManagersToggle(!showAllManagersToggle)}
-              className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
-                showAllManagersToggle 
-                  ? 'bg-slate-900 text-white border-slate-900' 
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {showAllManagersToggle ? 'All Managers' : 'Assigned Only'}
-            </button>
+                <button
+                  id="admin-toggle-all-managers-btn"
+                  onClick={() => setShowAllManagersToggle(!showAllManagersToggle)}
+                  className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                    showAllManagersToggle 
+                      ? 'bg-slate-900 text-white border-slate-900' 
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {showAllManagersToggle ? 'All Managers' : 'Assigned Only'}
+                </button>
+              </>
+            ) : (
+              <div 
+                id="manager-locked-scope-badge"
+                className="flex items-center gap-2 pl-2 border-l border-slate-200 text-xs"
+                title="Strict resource isolation: Only resources directly assigned to you or delegated to you are visible"
+              >
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span className="font-semibold">{currentUser.name}</span>
+                  <Lock className="w-3 h-3 text-slate-400" />
+                  {activeIncomingDelegations.length > 0 && (
+                    <span className="ml-1 text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.2 rounded">
+                      +{activeIncomingDelegations.length} Delegated
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -529,132 +645,33 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
           </div>
         )}
 
-        {/* SLA Escalation Policy Bar */}
-        <div className="mt-4 p-3.5 bg-slate-900 text-slate-100 rounded-xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 shadow-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
-              <Clock className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-bold text-white">Reconciliation SLA Governance:</span>
-                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-400/30 font-mono">Level 1: &gt;4 Working Days → Manager's Manager (VP)</span>
-                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded border border-purple-400/30 font-mono">Level 2: &ge;7 Total Days → Domain COO</span>
-              </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">
-                Managers must act within 4 working days of reconciliation initiation. After 7 days total elapsed, automated notification is dispatched to Domain COO.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 w-full lg:w-auto justify-end flex-wrap">
-            <div className="flex items-center gap-1.5 bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700 text-xs">
-              <span className="text-[11px] text-slate-400">Simulate Aging:</span>
-              <select
-                value={simulatedAgingDays}
-                onChange={(e) => setSimulatedAgingDays(Number(e.target.value))}
-                className="bg-slate-900 text-white text-xs px-2 py-0.5 rounded border border-slate-600 focus:outline-hidden"
-              >
-                <option value={0}>0 Days (Current Realtime)</option>
-                <option value={4}>4 Working Days (Triggers Level 1 VP Escalation)</option>
-                <option value={7}>7 Calendar Days (Triggers Level 2 Domain COO Escalation)</option>
-                <option value={10}>10 Days (Critical Domain COO Escalation)</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => {
-                let sentCount = 0;
-                managerDiscrepancies.forEach(({ batch, item }) => {
-                  if (!item.managerDecision && item.status !== 'REJECTED_BY_MANAGER') {
-                    const esc = evaluateItemEscalation(item, batch.approvalInitiatedAt, simulatedAgingDays);
-                    if (esc.isEscalated && esc.escalationLevel !== 'NONE' && onSendNotification) {
-                      const notif = buildEscalationNotification(batch, [item], esc.escalationLevel);
-                      onSendNotification(notif);
-                      sentCount++;
-                    }
-                  }
-                });
-                setEscalationNoticeSentToast(
-                  sentCount > 0 
-                    ? `Dispatched ${sentCount} automated escalation notification(s) to Skip-Level Managers and Domain COO.`
-                    : `No SLA breaches detected for the selected aging offset (${simulatedAgingDays} days).`
-                );
-                setTimeout(() => setEscalationNoticeSentToast(null), 5000);
-              }}
-              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors shrink-0 flex items-center gap-1"
-            >
-              <BellRing className="w-3.5 h-3.5" />
-              <span>Trigger Escalation Check</span>
-            </button>
-          </div>
-        </div>
-
-        {escalationNoticeSentToast && (
-          <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 text-xs flex items-center justify-between">
-            <span>{escalationNoticeSentToast}</span>
-            <button onClick={() => setEscalationNoticeSentToast(null)} className="text-xs font-bold text-emerald-700">Dismiss</button>
-          </div>
-        )}
-
-        {/* Sleek Manager Metrics */}
-        <div className="mt-5 grid grid-cols-1 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-100">
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Pending Discrepancies
-            </p>
-            <p className="text-2xl font-bold text-red-600">{pendingDiscrepanciesCount}</p>
-            <p className="text-[10px] text-slate-500 mt-1">Requiring decision</p>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Vendor Resubmissions
-            </p>
-            <p className="text-2xl font-bold text-purple-600">{resubmissionsCount}</p>
-            <p className="text-[10px] text-purple-600 font-medium mt-1">Corrected & ready for re-approval</p>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Routine Matched Lines
-            </p>
-            <p className="text-2xl font-bold text-emerald-600">{managerMatches.length}</p>
-            <p className="text-[10px] text-slate-500 mt-1">{pendingMatchesCount} awaiting sign-off</p>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Net Financial Exposure
-            </p>
-            <p className="text-2xl font-bold text-slate-900">
-              {formatCurrency(totalExposure, currentCurrency)}
-            </p>
-            <p className="text-[10px] text-slate-500 mt-1">Unbudgeted variance</p>
-          </div>
-        </div>
-
         {/* Quick Jump & View Density Control */}
         <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button
               onClick={scrollToApprovalQueue}
-              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 active:scale-95"
+              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 active:scale-95 cursor-pointer"
             >
               <ArrowDown className="w-3.5 h-3.5" />
               <span>Jump to Approval Queue ({pendingDiscrepanciesCount} Pending)</span>
             </button>
             <button
-              onClick={() => setShowDistributionChart(!showDistributionChart)}
-              className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium transition-colors inline-flex items-center gap-1.5 shadow-2xs"
+              id="toggle-manager-review-dashboard-btn"
+              onClick={() => setShowReviewDashboard(!showReviewDashboard)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5 shadow-2xs cursor-pointer ${
+                showReviewDashboard
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 hover:bg-slate-50 text-slate-700'
+              }`}
             >
-              {showDistributionChart ? 'Hide Status Chart (Compact)' : 'Show Status Chart'}
+              <Layers className="w-3.5 h-3.5" />
+              <span>{showReviewDashboard ? 'Hide Review Dashboard (Analytics)' : 'Show Review Dashboard (Analytics)'}</span>
             </button>
             {onOpenSendReminder && (
               <button
                 id="manager-nudge-vendors-btn"
                 onClick={() => onOpenSendReminder({ recipientEmail: 'ar-invoicing@apex-global.com' })}
-                className="px-3 py-1.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-semibold transition-colors inline-flex items-center gap-1.5 shadow-2xs"
+                className="px-3 py-1.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-semibold transition-colors inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
                 title="Send a reminder to vendor billing team regarding rejected lines or outstanding invoices"
               >
                 <BellRing className="w-3.5 h-3.5 text-amber-600" />
@@ -663,36 +680,127 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
             )}
           </div>
           <div className="text-xs text-slate-500 font-medium hidden sm:block">
-            Tip: Use 1-Click <span className="text-emerald-700 font-bold">Quick Authorize</span> on cards below to sign off without opening a modal.
+            Tip: Use 1-Click <span className="text-orange-700 font-bold">Approve Exception</span> or <span className="text-emerald-700 font-bold">Cap to DB Timesheet</span> on cards below to sign off.
           </div>
         </div>
+
+        {/* Expandable Manager Review Dashboard & Reanalytics (Closed by default) */}
+        {showReviewDashboard && (
+          <div className="mt-4 pt-4 border-t border-slate-200 space-y-5 animate-in fade-in duration-200">
+            {/* Sleek Manager Metrics */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Pending Discrepancies
+                </p>
+                <p className="text-2xl font-bold text-red-600">{pendingDiscrepanciesCount}</p>
+                <p className="text-[10px] text-slate-500 mt-1">Requiring decision</p>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Vendor Resubmissions
+                </p>
+                <p className="text-2xl font-bold text-purple-600">{resubmissionsCount}</p>
+                <p className="text-[10px] text-purple-600 font-medium mt-1">Corrected & ready for re-approval</p>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Routine Matched Lines
+                </p>
+                <p className="text-2xl font-bold text-emerald-600">{managerMatches.length}</p>
+                <p className="text-[10px] text-slate-500 mt-1">{pendingMatchesCount} awaiting sign-off</p>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Net Financial Exposure
+                </p>
+                <p className="text-2xl font-bold text-slate-900">
+                  {formatCurrency(totalExposure, currentCurrency)}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-1">Unbudgeted variance</p>
+              </div>
+            </div>
+
+            {/* Recharts Dashboard Summary Chart */}
+            <div className="border-t border-slate-100 pt-4">
+              <InvoiceStatusChart
+                batches={batches}
+                currentCurrency={currentCurrency}
+                portalType="manager"
+                managerEmail={showAllManagersToggle ? undefined : currentUser.email}
+                onOpenPdfReport={onOpenPdfReport}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Recharts Dashboard Summary Chart */}
-      {showDistributionChart && (
-        <InvoiceStatusChart
-          batches={batches}
-          currentCurrency={currentCurrency}
-          portalType="manager"
-          managerEmail={showAllManagersToggle ? undefined : currentUser.email}
-          onOpenPdfReport={onOpenPdfReport}
-        />
-      )}
+      {/* 2 PRIMARY QUEUE TABS: Action Required vs Actioned History */}
+      <div className="bg-slate-100 p-1.5 rounded-2xl flex items-center gap-1.5 border border-slate-200">
+        <button
+          id="tab-action-required"
+          onClick={() => {
+            setQueueMainTab('ACTION_REQUIRED');
+            clearSelection();
+          }}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            queueMainTab === 'ACTION_REQUIRED'
+              ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+          }`}
+        >
+          <Clock className={`w-4 h-4 ${queueMainTab === 'ACTION_REQUIRED' ? 'text-amber-600' : 'text-slate-400'}`} />
+          <span>Action Required (Pending)</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+            queueMainTab === 'ACTION_REQUIRED'
+              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+              : 'bg-slate-200 text-slate-700'
+          }`}>
+            {totalPendingActionCount}
+          </span>
+        </button>
+
+        <button
+          id="tab-actioned-history"
+          onClick={() => {
+            setQueueMainTab('ACTIONED_HISTORY');
+            clearSelection();
+          }}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            queueMainTab === 'ACTIONED_HISTORY'
+              ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+          }`}
+        >
+          <CheckCircle2 className={`w-4 h-4 ${queueMainTab === 'ACTIONED_HISTORY' ? 'text-emerald-600' : 'text-slate-400'}`} />
+          <span>Actioned History (Resolved)</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+            queueMainTab === 'ACTIONED_HISTORY'
+              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+              : 'bg-slate-200 text-slate-700'
+          }`}>
+            {totalActionedHistoryCount}
+          </span>
+        </button>
+      </div>
 
       {/* Queue View Selector Tabs & Batch Action Toolbar */}
       <div id="manager-action-queue" className="scroll-mt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => setActiveQueueTab('discrepancies')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeQueueTab === 'discrepancies'
-                ? 'bg-blue-600 text-white shadow-xs'
+                ? 'bg-blue-600 text-white shadow-xs font-bold'
                 : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
           >
             <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Discrepancy Exceptions ({managerDiscrepancies.length})</span>
-            {pendingDiscrepanciesCount > 0 && (
+            <span>Discrepancy Exceptions ({displayedDiscrepancies.length})</span>
+            {queueMainTab === 'ACTION_REQUIRED' && pendingDiscrepanciesCount > 0 && (
               <span className="px-1.5 py-0.2 bg-red-500 text-white rounded-full text-[10px] font-bold">
                 {pendingDiscrepanciesCount}
               </span>
@@ -701,15 +809,15 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
 
           <button
             onClick={() => setActiveQueueTab('resubmissions')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeQueueTab === 'resubmissions'
-                ? 'bg-purple-600 text-white shadow-xs'
+                ? 'bg-purple-600 text-white shadow-xs font-bold'
                 : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Resubmitted Corrections ({resubmissionsCount})</span>
-            {resubmissionsCount > 0 && (
+            <span>Resubmitted Corrections ({displayedResubmissions.length})</span>
+            {queueMainTab === 'ACTION_REQUIRED' && resubmissionsCount > 0 && (
               <span className="px-1.5 py-0.2 bg-purple-500 text-white rounded-full text-[10px] font-bold">
                 {resubmissionsCount}
               </span>
@@ -718,23 +826,40 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
 
           <button
             onClick={() => setActiveQueueTab('matches')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeQueueTab === 'matches'
-                ? 'bg-emerald-600 text-white shadow-xs'
+                ? 'bg-emerald-600 text-white shadow-xs font-bold'
                 : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
           >
             <CheckCheck className="w-3.5 h-3.5" />
-            <span>Routine Matched Lines ({managerMatches.length})</span>
+            <span>Routine Matched Lines ({displayedMatches.length})</span>
           </button>
         </div>
 
-        {/* Tab Right Controls */}
-        <div className="flex items-center gap-2">
+        {/* Tab Right Controls: Supplier Filter & Bulk Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Supplier Filter Dropdown */}
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs shadow-2xs">
+            <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-slate-500 font-medium">Supplier:</span>
+            <select
+              id="manager-supplier-filter-select"
+              value={supplierFilter}
+              onChange={(e) => setSupplierFilter(e.target.value)}
+              className="bg-transparent text-slate-800 font-bold focus:outline-hidden cursor-pointer"
+            >
+              <option value="ALL">All Suppliers ({availableSuppliers.length})</option>
+              {availableSuppliers.map(sup => (
+                <option key={sup} value={sup}>{sup}</option>
+              ))}
+            </select>
+          </div>
+
           {currentTabItems.length > 0 && (
             <button
               onClick={toggleSelectAll}
-              className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 transition-colors shadow-2xs"
+              className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
             >
               {isAllCurrentSelected ? (
                 <>
@@ -750,13 +875,13 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
             </button>
           )}
 
-          {activeQueueTab === 'matches' && managerMatches.length > 0 && (
+          {activeQueueTab === 'matches' && queueMainTab === 'ACTION_REQUIRED' && pendingMatches.length > 0 && (
             <button
               onClick={handleSignOffAllRoutineMatches}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs inline-flex items-center gap-1.5 transition-colors"
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <CheckCheck className="w-3.5 h-3.5" />
-              <span>1-Click Sign-Off All ({managerMatches.length})</span>
+              <span>1-Click Sign-Off All ({pendingMatches.length})</span>
             </button>
           )}
         </div>
@@ -767,32 +892,44 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <span>Action Required: Discrepancy Queue</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 uppercase">
-                {pendingDiscrepanciesCount} Pending
-              </span>
-              {rejectedCount > 0 && (
+              <span>{queueMainTab === 'ACTION_REQUIRED' ? 'Action Required: Discrepancy Queue' : 'Actioned History: Resolved Discrepancies'}</span>
+              {queueMainTab === 'ACTION_REQUIRED' ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 uppercase">
+                  {pendingDiscrepanciesCount} Pending
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
+                  {actionedDiscrepanciesCount} Resolved
+                </span>
+              )}
+              {rejectedCount > 0 && queueMainTab === 'ACTION_REQUIRED' && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white uppercase">
                   {rejectedCount} Rejected (Vendor Revising)
                 </span>
               )}
             </h2>
             <span className="text-xs text-slate-500">
-              Select multiple cards below to execute bulk approvals.
+              {queueMainTab === 'ACTION_REQUIRED'
+                ? 'Select multiple cards below to execute bulk approvals or rejections.'
+                : 'Review past manager decisions, exception authorizations, and audit remarks.'}
             </span>
           </div>
 
-          {managerDiscrepancies.length === 0 ? (
+          {displayedDiscrepancies.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-8 text-center shadow-xs">
               <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
-              <h3 className="text-sm font-bold text-slate-800">No Discrepancies Found</h3>
+              <h3 className="text-sm font-bold text-slate-800">
+                {queueMainTab === 'ACTION_REQUIRED' ? 'No Action Required' : 'No Actioned History Yet'}
+              </h3>
               <p className="text-xs text-slate-500 mt-1">
-                All vendor billing lines match your team's internal approved timesheets perfectly.
+                {queueMainTab === 'ACTION_REQUIRED'
+                  ? 'All discrepancy items have been reviewed, resolved, or match internal timesheets.'
+                  : 'Actioned discrepancy items will appear here after decisions are made.'}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
-              {managerDiscrepancies.map(({ batch, item }) => {
+              {displayedDiscrepancies.map(({ batch, item }) => {
                 const isResolved = !!item.managerDecision && item.status !== 'REJECTED_BY_MANAGER';
                 const isRejected = item.status === 'REJECTED_BY_MANAGER';
                 const isResubmitted = item.status === 'RESUBMITTED_FOR_REVIEW';
@@ -835,6 +972,12 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
 
                         <div className="space-y-2 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
+                            {/* Supplier Name Badge (First Element) */}
+                            <span className="px-2.5 py-0.5 bg-slate-900 text-white text-[10px] rounded-md font-bold uppercase tracking-wider flex items-center gap-1 shadow-2xs">
+                              <Building2 className="w-3 h-3 text-blue-400" />
+                              <span>{item.vendorName || batch.vendorName}</span>
+                            </span>
+
                             <span className="font-bold text-base text-slate-900">{item.resourceName}</span>
                             <span className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-0.5 rounded-sm">
                               {item.resourceEmail}
@@ -899,6 +1042,23 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                               </span>
                             )}
                           </div>
+
+                          {/* Historical Audit Context for Repeated Resources */}
+                          {(() => {
+                            const hKey = (item.resourceEmail || item.resourceName).toLowerCase().trim();
+                            const pastRecords = resourceHistoryMap.get(hKey) || [];
+                            const prior = pastRecords.filter(r => r.batchPo !== batch.poNumber || !item.managerDecision);
+                            if (prior.length === 0) return null;
+                            const latest = prior[0];
+                            return (
+                              <div className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 bg-sky-50 border border-sky-200 text-sky-900 rounded-md text-[11px] font-medium">
+                                <Info className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                                <span>
+                                  <strong>Prior record:</strong> You or team actioned <strong>{latest.approvedDays} days</strong> ({latest.action}) on <strong>{latest.batchPo}</strong> ({latest.dateStr})
+                                </span>
+                              </div>
+                            );
+                          })()}
 
                           {/* Level 1 or 2 Escalation Detail Banner */}
                           {escalationInfo.isEscalated && !isResolved && (
@@ -1059,11 +1219,11 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                                   'Quick 1-Click Approval: Authorized sprint overtime variance by Resource Manager.'
                                 );
                               }}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
-                              title="1-Click Authorize Claimed Days"
+                              className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                              title="1-Click Approve Exception (Authorize Claimed Days)"
                             >
                               <CheckCheck className="w-3.5 h-3.5" />
-                              <span>Quick Authorize</span>
+                              <span>Approve Exception</span>
                             </button>
 
                             <button
@@ -1072,20 +1232,53 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                                   batch.id,
                                   item.id,
                                   'ADJUST_TO_INTERNAL',
-                                  `Quick 1-Click Adjustment: Capped strictly to internal approved timesheet days (${item.internalApprovedDays} days).`
+                                  `1-Click Adjustment: Capped strictly to internal approved timesheet days (${item.internalApprovedDays} days).`
                                 );
                               }}
-                              className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                               title="1-Click Cap to Internal Timesheet Days"
                             >
                               <Clock className="w-3.5 h-3.5" />
-                              <span>Cap to Timesheet</span>
+                              <span>Cap to DB Timesheet</span>
                             </button>
+
+                            <button
+                              onClick={() => {
+                                onResolveDiscrepancy(
+                                  batch.id,
+                                  item.id,
+                                  'REJECT_BILLING',
+                                  '1-Click Rejection: Overbilled hours rejected; contractor hours must be corrected to project baseline.'
+                                );
+                              }}
+                              className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                              title="Reject billing line and require vendor correction"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Reject</span>
+                            </button>
+
+                            {currentUser.role === 'admin' && onReassignManager && (
+                              <button
+                                onClick={() => setReassignModalData({
+                                  batchId: batch.id,
+                                  itemIds: [item.id],
+                                  currentManager: item.managerName,
+                                  currentManagerEmail: item.managerEmail,
+                                  resourceName: item.resourceName
+                                })}
+                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-lg text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                                title="Admin: Reassign unapproved reconciliation to another manager"
+                              >
+                                <UserPlus className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>Reassign Manager</span>
+                              </button>
+                            )}
 
                             <button
                               id={`review-btn-${item.id}`}
                               onClick={() => handleOpenReviewModal(batch, item)}
-                              className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-medium shadow-xs transition-colors flex items-center gap-1.5"
+                              className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-medium shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                             >
                               <UserCheck className="w-3.5 h-3.5" />
                               <span>Review Modal</span>
@@ -1142,17 +1335,21 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
             </span>
           </div>
 
-          {managerResubmissions.length === 0 ? (
+          {displayedResubmissions.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-8 text-center shadow-xs">
               <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
-              <h3 className="text-sm font-bold text-slate-800">No Resubmissions Pending</h3>
+              <h3 className="text-sm font-bold text-slate-800">
+                {queueMainTab === 'ACTION_REQUIRED' ? 'No Resubmissions Pending' : 'No Actioned Resubmissions'}
+              </h3>
               <p className="text-xs text-slate-500 mt-1">
-                There are currently no vendor corrected lines awaiting your secondary sign-off.
+                {queueMainTab === 'ACTION_REQUIRED'
+                  ? 'There are currently no vendor corrected lines awaiting your secondary sign-off.'
+                  : 'Actioned vendor resubmissions will appear here after review.'}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
-              {managerResubmissions.map(({ batch, item }) => (
+              {displayedResubmissions.map(({ batch, item }) => (
                 <div key={item.id} className="bg-white rounded-xl p-5 border border-purple-200 shadow-xs space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -1162,12 +1359,17 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                         onChange={() => toggleSelectItem(item.id)}
                         className="w-4 h-4 rounded-sm text-blue-600 focus:ring-blue-500 cursor-pointer"
                       />
-                      <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Supplier Name Badge */}
+                        <span className="px-2.5 py-0.5 bg-slate-900 text-white text-[10px] rounded-md font-bold uppercase tracking-wider flex items-center gap-1 shadow-2xs">
+                          <Building2 className="w-3 h-3 text-blue-400" />
+                          <span>{item.vendorName || batch.vendorName}</span>
+                        </span>
                         <span className="font-bold text-slate-900 text-base">{item.resourceName}</span>
-                        <span className="text-xs text-slate-500 font-mono ml-2">{item.resourceEmail}</span>
+                        <span className="text-xs text-slate-500 font-mono ml-1">{item.resourceEmail}</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         onClick={() => {
                           onResolveDiscrepancy(
@@ -1177,14 +1379,32 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                             '1-Click Sign-Off on Vendor Correction Resubmission.'
                           );
                         }}
-                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5"
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
                       >
                         <CheckCheck className="w-3.5 h-3.5" />
                         <span>1-Click Sign-Off</span>
                       </button>
+
+                      {currentUser.role === 'admin' && onReassignManager && !item.managerDecision && (
+                        <button
+                          onClick={() => setReassignModalData({
+                            batchId: batch.id,
+                            itemIds: [item.id],
+                            currentManager: item.managerName,
+                            currentManagerEmail: item.managerEmail,
+                            resourceName: item.resourceName
+                          })}
+                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-lg text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                          title="Admin: Reassign unapproved resubmission to another manager"
+                        >
+                          <UserPlus className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Reassign</span>
+                        </button>
+                      )}
+
                       <button
                         onClick={() => handleOpenReviewModal(batch, item)}
-                        className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5"
+                        className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Detailed Review</span>
@@ -1217,18 +1437,20 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
-              <h2 className="font-bold text-slate-800 text-sm">Routine Matched Resources Sign-Off</h2>
+              <h2 className="font-bold text-slate-800 text-sm">
+                {queueMainTab === 'ACTION_REQUIRED' ? 'Routine Matched Resources Sign-Off' : 'Actioned Routine Matches'}
+              </h2>
               <p className="text-xs text-slate-500">
                 These consultant lines matched internal approved timesheets 100%. Managers can sign off on all routine items.
               </p>
             </div>
-            {managerMatches.length > 0 && (
+            {queueMainTab === 'ACTION_REQUIRED' && pendingMatches.length > 0 && (
               <button
                 onClick={handleSignOffAllRoutineMatches}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs inline-flex items-center gap-1.5"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <CheckCheck className="w-3.5 h-3.5" />
-                <span>Sign Off All ({managerMatches.length})</span>
+                <span>Sign Off All ({pendingMatches.length})</span>
               </button>
             )}
           </div>
@@ -1245,8 +1467,9 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                       className="w-4 h-4 rounded-sm text-blue-600 cursor-pointer"
                     />
                   </th>
+                  <th className="px-4 py-3.5">Supplier Name</th>
                   <th className="px-4 py-3.5">Resource (Identifier)</th>
-                  <th className="px-4 py-3.5">PO & Vendor</th>
+                  <th className="px-4 py-3.5">PO Number</th>
                   <th className="px-4 py-3.5 text-center">Approved Days</th>
                   <th className="px-4 py-3.5 text-center">Billed Days</th>
                   <th className="px-4 py-3.5">Rate & Total</th>
@@ -1255,7 +1478,7 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                 </tr>
               </thead>
               <tbody className="text-xs divide-y divide-slate-100">
-                {managerMatches.map(({ batch, item }) => (
+                {displayedMatches.map(({ batch, item }) => (
                   <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-4 py-3.5 text-center">
                       <input
@@ -1266,12 +1489,17 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
                       />
                     </td>
                     <td className="px-4 py-3.5">
+                      <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>{item.vendorName || batch.vendorName}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5">
                       <div className="font-medium text-slate-900">{item.resourceName}</div>
                       <div className="text-slate-400 font-mono text-[11px]">{item.resourceEmail}</div>
                     </td>
                     <td className="px-4 py-3.5">
-                      <div className="font-mono text-slate-700">{item.poNumber}</div>
-                      <div className="text-slate-400 text-[10px]">{item.vendorName}</div>
+                      <div className="font-mono text-slate-700 font-semibold">{item.poNumber}</div>
                     </td>
                     <td className="px-4 py-3.5 text-center font-bold text-emerald-700">
                       {item.internalApprovedDays.toFixed(1)}
@@ -1346,24 +1574,52 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
               <>
                 <button
                   onClick={() => handleOpenBulkModal('APPROVE_VARIANCE')}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <CheckCheck className="w-3.5 h-3.5" />
-                  <span>Bulk Authorize Overtime</span>
+                  <span>Bulk Approve Exceptions</span>
                 </button>
 
                 <button
                   onClick={() => handleOpenBulkModal('ADJUST_TO_INTERNAL')}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Clock className="w-3.5 h-3.5" />
-                  <span>Bulk Adjust to Timesheet</span>
+                  <span>Bulk Cap to DB Timesheet</span>
                 </button>
+
+                <button
+                  onClick={() => handleOpenBulkModal('REJECT_BILLING')}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>Bulk Reject</span>
+                </button>
+
+                {currentUser.role === 'admin' && onReassignManager && (
+                  <button
+                    onClick={() => {
+                      const firstSelected = selectedItemsList[0];
+                      const batchId = allItems.find(x => x.item.id === firstSelected?.id)?.batch.id || batches[0]?.id;
+                      setReassignModalData({
+                        batchId,
+                        itemIds: Array.from(selectedItemIds),
+                        currentManager: 'Selected Managers',
+                        currentManagerEmail: '',
+                        resourceName: `${selectedItemIds.size} Selected Resources`
+                      });
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>Bulk Reassign Manager</span>
+                  </button>
+                )}
               </>
             ) : (
               <button
                 onClick={() => handleOpenBulkModal('APPROVE_ROUTINE')}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5"
+                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <CheckCheck className="w-3.5 h-3.5" />
                 <span>Bulk Sign Off Matches</span>
@@ -1372,7 +1628,7 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
 
             <button
               onClick={clearSelection}
-              className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-white font-medium"
+              className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-white font-medium cursor-pointer"
             >
               Clear
             </button>
@@ -1674,6 +1930,135 @@ export const ManagerPortal: React.FC<ManagerPortalProps> = ({
         auditLogs={auditLogs}
         currentUser={currentUser}
       />
+
+      {/* ADMIN REASSIGNMENT MODAL */}
+      {reassignModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">
+                    Reassign Invoice Reconciliation
+                  </h3>
+                  <p className="text-xs text-indigo-700 font-medium">
+                    Admin Privilege: Reassign unapproved lines to an alternate manager
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setReassignModalData(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                title="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
+              {/* Target info */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Target Line(s):</span>
+                  <span className="font-bold text-slate-800">{reassignModalData.resourceName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Item Count:</span>
+                  <span className="font-semibold text-slate-700">{reassignModalData.itemIds.length} line item(s)</span>
+                </div>
+                {reassignModalData.currentManager && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Current Assigned:</span>
+                    <span className="font-medium text-slate-700">{reassignModalData.currentManager}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Select New Manager */}
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Assign To Manager <span className="text-red-500">*</span>
+                </label>
+                <select
+                  id="admin-reassign-manager-select"
+                  value={selectedTargetManagerEmail}
+                  onChange={(e) => setSelectedTargetManagerEmail(e.target.value)}
+                  className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                >
+                  <option value="david.chen@abcompany.com">David Chen — Engineering Manager (Core Applications)</option>
+                  <option value="sarah.jenkins@abcompany.com">Sarah Jenkins — Engineering Manager (Cloud & Infrastructure)</option>
+                  <option value="elena.rostova@abcompany.com">Elena Rostova — Engineering Manager (Data Platforms & ML)</option>
+                  <option value="marcus.sterling.coo@abcompany.com">Marcus Sterling — Domain COO (Cloud & Infrastructure)</option>
+                  <option value="victoria.vance.coo@abcompany.com">Victoria Vance — Domain COO (Core Applications)</option>
+                </select>
+              </div>
+
+              {/* Reason / Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Reassignment Reason / Audit Notes <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="admin-reassign-reason"
+                  rows={3}
+                  value={reassignmentReason}
+                  onChange={(e) => setReassignmentReason(e.target.value)}
+                  placeholder="e.g. Primary manager is on PTO / escalation delegation required for PO closing..."
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p>
+                  Reassigning transfers review authority to the chosen manager immediately and logs an immutable audit trail entry under your admin credential.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 sm:p-5 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50 shrink-0">
+              <button
+                type="button"
+                onClick={() => setReassignModalData(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="confirm-reassign-btn"
+                onClick={() => {
+                  if (!onReassignManager || !reassignModalData) return;
+                  const targetUser = SAMPLE_USERS.find(u => u.email.toLowerCase() === selectedTargetManagerEmail.toLowerCase());
+                  const targetName = targetUser ? targetUser.name : selectedTargetManagerEmail.split('@')[0].replace('.', ' ');
+
+                  onReassignManager(
+                    reassignModalData.batchId,
+                    reassignModalData.itemIds,
+                    selectedTargetManagerEmail,
+                    targetName,
+                    reassignmentReason || 'Reassigned by Admin for timely reconciliation.'
+                  );
+                  setReassignModalData(null);
+                  clearSelection();
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Confirm Reassignment</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

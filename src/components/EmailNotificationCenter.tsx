@@ -1,27 +1,50 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Mail, 
   CheckCircle2, 
-  Inbox,
-  ArrowRight,
-  Clock,
-  Send,
-  ExternalLink,
-  Copy,
-  Check,
-  AlertCircle,
-  Building2,
-  Calendar,
-  Layers,
-  FileText,
-  BellRing,
-  AlertTriangle,
-  Users,
-  ShieldCheck,
-  UserCheck,
-  Award,
-  FileCheck,
-  Download
+  Inbox, 
+  ArrowRight, 
+  Clock, 
+  Send, 
+  ExternalLink, 
+  Copy, 
+  Check, 
+  AlertCircle, 
+  Building2, 
+  Calendar, 
+  Layers, 
+  FileText, 
+  BellRing, 
+  AlertTriangle, 
+  Users, 
+  ShieldCheck, 
+  UserCheck, 
+  Award, 
+  FileCheck, 
+  Download,
+  Search,
+  Trash2,
+  Archive,
+  Folder,
+  Tag,
+  Reply,
+  ReplyAll,
+  Forward,
+  Printer,
+  ChevronDown,
+  MoreHorizontal,
+  FileSpreadsheet,
+  Settings,
+  HelpCircle,
+  Grid,
+  Bell,
+  Star,
+  Flag,
+  RotateCcw,
+  CheckSquare,
+  Filter,
+  SlidersHorizontal,
+  Bookmark
 } from 'lucide-react';
 import { EmailNotification, Currency } from '../types';
 import { formatCurrency } from '../utils/reconciliationEngine';
@@ -51,22 +74,64 @@ export const EmailNotificationCenter: React.FC<EmailNotificationCenterProps> = (
   onOpenPdfReport,
   onTriggerDailyReminders
 }) => {
-  const [filter, setFilter] = useState<'ALL' | 'APPROVALS' | 'CLEARANCE' | 'REMINDERS'>('ALL');
-  const [selectedEmail, setSelectedEmail] = useState<EmailNotification | null>(
-    notifications.length > 0 ? notifications[0] : null
+  const [selectedFolder, setSelectedFolder] = useState<'INBOX' | 'APPROVALS' | 'CLEARANCE' | 'REMINDERS' | 'SENT' | 'ARCHIVE' | 'DELETED'>('INBOX');
+  const [mailboxTab, setMailboxTab] = useState<'FOCUSED' | 'OTHER'>('FOCUSED');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedVendorFilter, setSelectedVendorFilter] = useState<string>('ALL');
+  const [selectedEmailId, setSelectedEmailId] = useState<string>(
+    notifications.length > 0 ? notifications[0].id : ''
   );
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+  const [flaggedIds, setFlaggedIds] = useState<Set<string>>(new Set());
 
+  // Derive counts
   const remindersCount = notifications.filter(n => n.isReminder).length;
   const clearanceCount = notifications.filter(n => n.isClearanceNotification).length;
   const approvalsCount = notifications.filter(n => !n.isReminder && !n.isClearanceNotification).length;
+  const unreadCount = notifications.filter(n => !n.isRead).length;
 
-  const filteredNotifications = notifications.filter(n => {
-    if (filter === 'APPROVALS') return !n.isReminder && !n.isClearanceNotification;
-    if (filter === 'CLEARANCE') return !!n.isClearanceNotification;
-    if (filter === 'REMINDERS') return !!n.isReminder;
-    return true;
-  });
+  // Filtered emails
+  const filteredEmails = useMemo(() => {
+    return notifications.filter(email => {
+      // Folder filtering
+      if (selectedFolder === 'APPROVALS' && (email.isReminder || email.isClearanceNotification)) return false;
+      if (selectedFolder === 'CLEARANCE' && !email.isClearanceNotification) return false;
+      if (selectedFolder === 'REMINDERS' && !email.isReminder) return false;
+      if (selectedFolder === 'SENT') return false; // sent simulator
+      if (selectedFolder === 'ARCHIVE' || selectedFolder === 'DELETED') return false;
+
+      // Mailbox tab: Focused vs Other (Outlook style: approvals and critical reminders in Focused, general digests in Other)
+      if (mailboxTab === 'FOCUSED') {
+        if (email.isReminder && email.urgency === 'ROUTINE') return false;
+      }
+
+      // Vendor filter
+      if (selectedVendorFilter !== 'ALL') {
+        const vendorMatch = (email.vendorName && email.vendorName.toLowerCase().includes(selectedVendorFilter.toLowerCase())) ||
+          (email.poNumber && email.poNumber.toLowerCase().includes(selectedVendorFilter.toLowerCase()));
+        if (!vendorMatch) return false;
+      }
+
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matches = 
+          email.subject.toLowerCase().includes(q) ||
+          email.toName.toLowerCase().includes(q) ||
+          email.toEmail.toLowerCase().includes(q) ||
+          email.poNumber.toLowerCase().includes(q) ||
+          (email.vendorName && email.vendorName.toLowerCase().includes(q)) ||
+          email.previewText.toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+
+      return true;
+    });
+  }, [notifications, selectedFolder, mailboxTab, selectedVendorFilter, searchQuery]);
+
+  const selectedEmail = useMemo(() => {
+    return notifications.find(e => e.id === selectedEmailId) || (filteredEmails.length > 0 ? filteredEmails[0] : null);
+  }, [notifications, selectedEmailId, filteredEmails]);
 
   const getToolUrl = (email: EmailNotification) => {
     if (email.directToolUrl) return email.directToolUrl;
@@ -81,895 +146,860 @@ export const EmailNotificationCenter: React.FC<EmailNotificationCenterProps> = (
     setTimeout(() => setCopiedUrl(false), 2500);
   };
 
+  const toggleFlag = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFlaggedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Avatar background colors in Outlook palette
+  const getAvatarColor = (name: string) => {
+    const colors = [
+      'bg-[#0078D4] text-white',
+      'bg-[#107C41] text-white',
+      'bg-[#5C2D91] text-white',
+      'bg-[#D83B01] text-white',
+      'bg-[#008272] text-white',
+      'bg-[#A4262C] text-white',
+    ];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  const getInitials = (name?: string) => {
+    if (!name) return 'AB';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 pb-12 font-sans">
       
-      {/* Header */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
+      {/* Outer Outlook Frame */}
+      <div className="bg-white rounded-xl border border-slate-300 shadow-md overflow-hidden flex flex-col">
+        
+        {/* 1. Outlook Top Blue Brand Bar (#0078D4 Microsoft 365 Blue) */}
+        <header className="bg-[#0078D4] text-white px-4 py-2.5 flex items-center justify-between gap-4 select-none">
+          {/* Left: App Launcher & Logo */}
+          <div className="flex items-center gap-3 shrink-0">
+            <button 
+              className="p-1.5 hover:bg-[#106ebe] rounded-md transition-colors cursor-pointer text-white/90 hover:text-white"
+              title="Microsoft 365 App Launcher"
+            >
+              <Grid className="w-5 h-5" />
+            </button>
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded-full font-bold border border-blue-100 uppercase">
-                Automated Dispatch Center
-              </span>
-              <span className="text-xs text-slate-500 font-mono">
-                SMTP / Internal Relay Simulator
+              <div className="w-7 h-7 rounded bg-white text-[#0078D4] flex items-center justify-center shadow-xs font-bold">
+                <Mail className="w-4 h-4 fill-[#0078D4] text-white" />
+              </div>
+              <span className="text-base font-bold tracking-tight text-white">Outlook</span>
+              <span className="text-[11px] bg-white/20 text-white font-medium px-2 py-0.5 rounded-full">
+                AB Company AP Gateway
               </span>
             </div>
-            <h1 className="text-xl font-bold text-slate-800 tracking-tight mt-1">
-              Automated Manager Email Notifications
-            </h1>
-            <p className="text-xs text-slate-500 max-w-2xl mt-0.5">
-              Whenever a vendor initiates an approval flow or an invoice discrepancy is detected, the system immediately dispatches automated email alerts to the responsible AB Company resource managers with secure deep-links.
-            </p>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* Center: Outlook Search Box */}
+          <div className="flex-1 max-w-xl mx-2">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search mail, resource managers, and purchase orders (Ctrl+E)"
+                className="w-full bg-white text-slate-900 placeholder:text-slate-500 text-xs rounded-lg pl-9 pr-8 py-1.5 focus:outline-hidden focus:ring-2 focus:ring-blue-300 shadow-xs"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Quick Tools & Outlook Avatar */}
+          <div className="flex items-center gap-2 shrink-0">
             {onTriggerDailyReminders && (
-              <button
+              <button 
                 onClick={onTriggerDailyReminders}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition-colors"
-                id="dispatch-daily-reminders-btn"
-                title="Dispatch automated daily reminder digest to all resource managers who have pending consultant timesheet items"
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold bg-[#106ebe] hover:bg-[#005a9e] text-white rounded-md transition-colors border border-blue-400/40 cursor-pointer"
+                title="Trigger automated morning reminder digest to all resource managers"
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>Daily Manager Reminders</span>
+                <span>Daily Digest</span>
               </button>
             )}
 
             {onOpenSendReminder && (
-              <button
+              <button 
                 onClick={onOpenSendReminder}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors"
-                id="dispatch-reminder-btn"
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold bg-white text-[#0078D4] hover:bg-blue-50 rounded-md transition-colors shadow-2xs font-bold cursor-pointer"
+                title="Compose custom reminder / nudge to managers or vendors"
               >
                 <BellRing className="w-3.5 h-3.5" />
-                <span>Send Reminder</span>
+                <span>Nudge Manager</span>
               </button>
             )}
 
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 shadow-2xs">
-              <Inbox className="w-3.5 h-3.5 text-slate-400" />
-              <span>{notifications.length} Emails Sent</span>
-            </span>
-          </div>
-        </div>
-      </div>
+            <div className="h-5 w-[1px] bg-blue-400/40 mx-1 hidden sm:block"></div>
 
-      {/* Two Column Layout: Email List on Left, Email Reader on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Column: Email Log Items */}
-        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-          <div className="p-3 bg-slate-50 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Dispatched Alerts</h3>
-            
-            {/* Filter Tabs */}
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setFilter('ALL')}
-                className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                  filter === 'ALL'
-                    ? 'bg-slate-900 text-white'
-                    : 'text-slate-600 hover:bg-slate-200'
-                }`}
+            <div className="w-8 h-8 rounded-full bg-[#107C41] text-white text-xs font-bold flex items-center justify-center ring-2 ring-white/40 shadow-xs">
+              LJ
+            </div>
+          </div>
+        </header>
+
+        {/* 2. Outlook Command Bar / Ribbon (White Toolbar) */}
+        <div className="bg-[#f3f2f1] border-b border-slate-200 px-4 py-1.5 flex items-center justify-between gap-3 overflow-x-auto select-none">
+          <div className="flex items-center gap-1.5 text-xs text-slate-700">
+            {/* New Mail Pill */}
+            {onOpenSendReminder && (
+              <button 
+                onClick={onOpenSendReminder}
+                className="px-3.5 py-1.5 bg-[#0078D4] hover:bg-[#106ebe] text-white font-semibold rounded-md shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer text-xs mr-2"
               >
-                All ({notifications.length})
+                <Mail className="w-3.5 h-3.5" />
+                <span>New mail</span>
+                <ChevronDown className="w-3 h-3 text-blue-200" />
               </button>
-              <button
-                onClick={() => setFilter('APPROVALS')}
-                className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                  filter === 'APPROVALS'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-slate-600 hover:bg-slate-200'
-                }`}
+            )}
+
+            {/* Outlook Action Buttons */}
+            <button 
+              className="px-2.5 py-1.5 hover:bg-slate-200 rounded transition-colors inline-flex items-center gap-1 text-slate-700 text-xs cursor-pointer"
+              title="Delete selected notification"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-slate-500" />
+              <span>Delete</span>
+            </button>
+
+            <button 
+              className="px-2.5 py-1.5 hover:bg-slate-200 rounded transition-colors inline-flex items-center gap-1 text-slate-700 text-xs cursor-pointer"
+              title="Archive notification"
+            >
+              <Archive className="w-3.5 h-3.5 text-slate-500" />
+              <span>Archive</span>
+            </button>
+
+            <button 
+              onClick={() => {
+                if (selectedEmail) onMarkAsRead(selectedEmail.id);
+              }}
+              className="px-2.5 py-1.5 hover:bg-slate-200 rounded transition-colors inline-flex items-center gap-1 text-slate-700 text-xs cursor-pointer"
+              title="Mark as read"
+            >
+              <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
+              <span>Mark as read</span>
+            </button>
+
+            <div className="h-4 w-[1px] bg-slate-300 mx-1"></div>
+
+            {/* Quick Supplier Filter */}
+            <div className="flex items-center gap-1 text-xs text-slate-600 bg-white px-2 py-1 rounded border border-slate-200 shadow-2xs">
+              <Filter className="w-3 h-3 text-slate-400" />
+              <span className="text-[11px] font-medium text-slate-500">Supplier:</span>
+              <select
+                value={selectedVendorFilter}
+                onChange={(e) => setSelectedVendorFilter(e.target.value)}
+                className="bg-transparent text-slate-800 text-[11px] font-bold focus:outline-hidden cursor-pointer"
               >
-                Approvals ({approvalsCount})
-              </button>
-              <button
-                onClick={() => setFilter('CLEARANCE')}
-                className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-colors ${
-                  filter === 'CLEARANCE'
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-emerald-700 hover:bg-emerald-50'
-                }`}
-              >
-                <CheckCircle2 className="w-2.5 h-2.5" />
-                <span>Cleared PICC ({clearanceCount})</span>
-              </button>
-              <button
-                onClick={() => setFilter('REMINDERS')}
-                className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-colors ${
-                  filter === 'REMINDERS'
-                    ? 'bg-blue-600 text-white'
-                    : 'text-blue-700 hover:bg-blue-50'
-                }`}
-              >
-                <BellRing className="w-2.5 h-2.5" />
-                <span>Reminders ({remindersCount})</span>
-              </button>
+                <option value="ALL">All Suppliers</option>
+                <option value="Apex Global Solutions">Apex Global</option>
+                <option value="TechCorp Solutions">TechCorp</option>
+                <option value="GlobalLogic Partners">GlobalLogic</option>
+              </select>
             </div>
           </div>
 
-          <div className="divide-y divide-slate-100 max-h-[580px] overflow-y-auto">
-            {filteredNotifications.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 text-xs">
-                {filter === 'REMINDERS' 
-                  ? 'No reminder nudges sent yet. Click "Send Reminder" to nudge managers, vendors, or all stakeholders.'
-                  : filter === 'CLEARANCE'
-                  ? 'No batches have completed clearance yet. Once a manager signs off or all line items are approved, automated PICC certificates will be dispatched here.'
-                  : 'No email notifications dispatched yet.'}
-              </div>
-            ) : (
-              filteredNotifications.map((notif) => {
-                const isSelected = selectedEmail?.id === notif.id;
-                return (
-                  <div
-                    key={notif.id}
-                    onClick={() => {
-                      setSelectedEmail(notif);
-                      onMarkAsRead(notif.id);
-                    }}
-                    className={`p-4 cursor-pointer transition-colors ${
-                      isSelected 
-                        ? 'bg-blue-50/60 border-l-4 border-blue-600' 
-                        : 'hover:bg-slate-50/80 border-l-4 border-transparent'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-1.5">
-                        {notif.isClearanceNotification ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 flex items-center gap-1">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                            <span>PICC CLEARED</span>
-                          </span>
-                        ) : notif.isReminder ? (
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 ${
-                            notif.urgency === 'CRITICAL'
-                              ? 'bg-rose-100 text-rose-800'
-                              : notif.urgency === 'URGENT'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-blue-100 text-blue-800'
-                          }`}>
-                            <BellRing className="w-2.5 h-2.5" />
-                            <span>{notif.urgency || 'REMINDER'}</span>
-                          </span>
-                        ) : (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-purple-100 text-purple-800">
-                            APPROVAL
-                          </span>
-                        )}
-                        <span className="text-xs font-bold text-slate-900 truncate max-w-[140px]">
-                          To: {notif.toName}
-                        </span>
-                      </div>
-
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {new Date(notif.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-
-                    <div className="text-xs font-semibold text-slate-800 line-clamp-1 mb-1">
-                      {notif.subject}
-                    </div>
-
-                    <p className="text-[11px] text-slate-500 line-clamp-2">
-                      {notif.isReminder && notif.reminderMessage 
-                        ? notif.reminderMessage 
-                        : notif.previewText}
-                    </p>
-
-                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100/60 text-[10px]">
-                      <span className="font-mono text-slate-400">{notif.poNumber}</span>
-                      {notif.isReminder ? (
-                        <span className="font-semibold text-slate-600 flex items-center gap-1">
-                          <span>From: {notif.senderRole ? notif.senderRole.toUpperCase() : (notif.fromName || 'System')}</span>
-                        </span>
-                      ) : (
-                        <span className="font-bold text-red-600">
-                          {notif.discrepanciesCount} Discrepancies ({formatCurrency(notif.financialImpact, notif.currency)})
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="text-[11px] font-mono">
+              Total {notifications.length} alerts • {unreadCount} unread
+            </span>
           </div>
         </div>
 
-        {/* Right Column: Full Email Reader */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-          {selectedEmail ? (
-            <div className="flex flex-col h-full">
-              
-              {/* Email Client Header */}
-              <div className="p-5 border-b border-slate-100 bg-slate-50/50 space-y-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 leading-snug">
-                      {selectedEmail.subject}
-                    </h2>
-                    <div className="mt-1 text-xs text-slate-600 space-y-0.5">
-                      <div>
-                        <span className="text-slate-400">From: </span>
-                        <span className="font-medium text-slate-800">{selectedEmail.fromEmail}</span>
+        {/* 3. Three-Pane Mailbox Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[640px] bg-white">
+          
+          {/* Pane 1: Left Navigation / Folders Pane (Col span 2) */}
+          <div className="lg:col-span-2 border-r border-slate-200 bg-[#f8f9fa] p-3 space-y-4 flex flex-col justify-between select-none">
+            <div className="space-y-3">
+              {/* Favorites Header */}
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 block mb-1">
+                  Favorites
+                </span>
+                <nav className="space-y-0.5 text-xs">
+                  <button
+                    onClick={() => setSelectedFolder('INBOX')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                      selectedFolder === 'INBOX' 
+                        ? 'bg-[#edebe9] text-[#0078D4]' 
+                        : 'text-slate-700 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Inbox className="w-4 h-4 text-[#0078D4]" />
+                      <span>Inbox</span>
+                    </div>
+                    <span className={`text-[11px] px-1.5 py-0.2 rounded-full font-bold ${
+                      selectedFolder === 'INBOX' ? 'bg-[#0078D4] text-white' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {notifications.length}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedFolder('APPROVALS')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                      selectedFolder === 'APPROVALS' 
+                        ? 'bg-[#edebe9] text-purple-800' 
+                        : 'text-slate-700 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-purple-600" />
+                      <span>Approvals</span>
+                    </div>
+                    <span className="text-[11px] px-1.5 py-0.2 rounded-full font-bold bg-purple-100 text-purple-800">
+                      {approvalsCount}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedFolder('CLEARANCE')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                      selectedFolder === 'CLEARANCE' 
+                        ? 'bg-[#edebe9] text-emerald-800' 
+                        : 'text-slate-700 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Award className="w-4 h-4 text-emerald-600" />
+                      <span>PICC Cleared</span>
+                    </div>
+                    <span className="text-[11px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-100 text-emerald-800">
+                      {clearanceCount}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedFolder('REMINDERS')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                      selectedFolder === 'REMINDERS' 
+                        ? 'bg-[#edebe9] text-amber-800' 
+                        : 'text-slate-700 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <BellRing className="w-4 h-4 text-amber-600" />
+                      <span>Nudges</span>
+                    </div>
+                    <span className="text-[11px] px-1.5 py-0.2 rounded-full font-bold bg-amber-100 text-amber-800">
+                      {remindersCount}
+                    </span>
+                  </button>
+                </nav>
+              </div>
+
+              {/* Standard Folders Tree */}
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 block mb-1">
+                  Folders
+                </span>
+                <nav className="space-y-0.5 text-xs text-slate-700">
+                  <button 
+                    onClick={() => setSelectedFolder('SENT')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                      selectedFolder === 'SENT' ? 'bg-[#edebe9] text-[#0078D4]' : 'hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Send className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Sent Items</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-mono">14</span>
+                  </button>
+
+                  <button 
+                    onClick={() => setSelectedFolder('ARCHIVE')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                      selectedFolder === 'ARCHIVE' ? 'bg-[#edebe9] text-[#0078D4]' : 'hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Archive className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Archive</span>
+                    </div>
+                  </button>
+
+                  <button 
+                    onClick={() => setSelectedFolder('DELETED')}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                      selectedFolder === 'DELETED' ? 'bg-[#edebe9] text-[#0078D4]' : 'hover:bg-slate-200/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Trash2 className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Deleted Items</span>
+                    </div>
+                  </button>
+                </nav>
+              </div>
+
+              {/* Categories & Vendors */}
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 block mb-1">
+                  Vendors
+                </span>
+                <div className="space-y-1 text-[11px]">
+                  <div 
+                    onClick={() => setSelectedVendorFilter(selectedVendorFilter.includes('Apex') ? 'ALL' : 'Apex')}
+                    className={`flex items-center gap-2 px-2.5 py-1 rounded cursor-pointer transition-colors ${
+                      selectedVendorFilter.includes('Apex') ? 'bg-blue-100 font-bold text-blue-900' : 'text-slate-600 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-[#0078D4]"></div>
+                    <span className="truncate">Apex Global Solutions</span>
+                  </div>
+                  <div 
+                    onClick={() => setSelectedVendorFilter(selectedVendorFilter.includes('TechCorp') ? 'ALL' : 'TechCorp')}
+                    className={`flex items-center gap-2 px-2.5 py-1 rounded cursor-pointer transition-colors ${
+                      selectedVendorFilter.includes('TechCorp') ? 'bg-indigo-100 font-bold text-indigo-900' : 'text-slate-600 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-purple-600"></div>
+                    <span className="truncate">TechCorp Systems</span>
+                  </div>
+                  <div 
+                    onClick={() => setSelectedVendorFilter(selectedVendorFilter.includes('GlobalLogic') ? 'ALL' : 'GlobalLogic')}
+                    className={`flex items-center gap-2 px-2.5 py-1 rounded cursor-pointer transition-colors ${
+                      selectedVendorFilter.includes('GlobalLogic') ? 'bg-emerald-100 font-bold text-emerald-900' : 'text-slate-600 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-emerald-600"></div>
+                    <span className="truncate">GlobalLogic Partners</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Left Footer: Outlook Connected Status */}
+            <div className="pt-3 border-t border-slate-200 text-[10px] text-slate-500 space-y-1">
+              <div className="flex items-center gap-1 text-emerald-700 font-bold">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                <span>Connected to Exchange</span>
+              </div>
+              <div className="text-slate-400 font-mono text-[9px]">
+                smtp.abcompany.internal
+              </div>
+            </div>
+          </div>
+
+          {/* Pane 2: Middle Message List Pane (Col span 4) */}
+          <div className="lg:col-span-4 border-r border-slate-200 flex flex-col bg-white overflow-hidden">
+            
+            {/* Outlook "Focused" and "Other" Tabs */}
+            <div className="border-b border-slate-200 px-4 pt-2.5 flex items-center justify-between select-none bg-white">
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setMailboxTab('FOCUSED')}
+                  className={`pb-2 text-xs font-bold transition-all relative cursor-pointer ${
+                    mailboxTab === 'FOCUSED'
+                      ? 'text-[#0078D4]'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>Focused</span>
+                  {mailboxTab === 'FOCUSED' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0078D4] rounded-t-full"></span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setMailboxTab('OTHER')}
+                  className={`pb-2 text-xs font-bold transition-all relative cursor-pointer ${
+                    mailboxTab === 'OTHER'
+                      ? 'text-[#0078D4]'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>Other</span>
+                  {mailboxTab === 'OTHER' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0078D4] rounded-t-full"></span>
+                  )}
+                </button>
+              </div>
+
+              <div className="pb-2 text-[11px] text-slate-500 flex items-center gap-1 font-medium">
+                <SlidersHorizontal className="w-3 h-3" />
+                <span>Filter</span>
+              </div>
+            </div>
+
+            {/* Message List Items */}
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 max-h-[600px]">
+              {filteredEmails.length === 0 ? (
+                <div className="p-10 text-center text-slate-400 text-xs">
+                  <Inbox className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                  <p className="font-semibold text-slate-600">All caught up!</p>
+                  <p className="text-[11px] text-slate-400 mt-1">No alerts found matching your current folder or search filter.</p>
+                </div>
+              ) : (
+                filteredEmails.map((email) => {
+                  const isSelected = selectedEmail?.id === email.id;
+                  const isFlagged = flaggedIds.has(email.id);
+                  const avatarColor = getAvatarColor(email.toName || email.fromName || 'AB');
+                  const initials = getInitials(email.toName || email.fromName);
+
+                  return (
+                    <div
+                      key={email.id}
+                      onClick={() => {
+                        setSelectedEmailId(email.id);
+                        onMarkAsRead(email.id);
+                      }}
+                      className={`group p-3 cursor-pointer transition-colors relative border-l-[3.5px] ${
+                        isSelected
+                          ? 'bg-[#e5f1fb] border-l-[#0078D4]'
+                          : 'hover:bg-[#f3f2f1] border-l-transparent'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {/* Outlook Circular Sender Avatar */}
+                        <div className={`w-8 h-8 rounded-full ${avatarColor} flex items-center justify-center text-xs font-bold shrink-0 shadow-2xs`}>
+                          {initials}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          {/* Row 1: Sender Name & Date */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-900 truncate max-w-[150px]">
+                              {email.toName || 'Resource Manager'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                              {new Date(email.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+
+                          {/* Row 2: Subject */}
+                          <div className="text-xs font-semibold text-slate-800 truncate mt-0.5 leading-snug">
+                            {email.subject}
+                          </div>
+
+                          {/* Row 3: 2-Line Preview Snippet */}
+                          <p className="text-[11px] text-slate-500 line-clamp-2 mt-0.5 leading-tight">
+                            {email.isReminder && email.reminderMessage ? email.reminderMessage : email.previewText}
+                          </p>
+
+                          {/* Row 4: Outlook Tags & Badges */}
+                          <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[10px]">
+                            {email.isClearanceNotification ? (
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold flex items-center gap-1">
+                                <Award className="w-2.5 h-2.5 text-emerald-600" />
+                                <span>PICC CLEARED</span>
+                              </span>
+                            ) : email.isReminder ? (
+                              <span className={`px-1.5 py-0.2 rounded font-bold flex items-center gap-1 ${
+                                email.urgency === 'CRITICAL'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : email.urgency === 'URGENT'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                <BellRing className="w-2.5 h-2.5" />
+                                <span>{email.urgency || 'NUDGE'}</span>
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-bold">
+                                APPROVAL REQUIRED
+                              </span>
+                            )}
+
+                            <span className="font-mono text-slate-500 bg-slate-100 px-1 rounded">
+                              {email.poNumber}
+                            </span>
+
+                            {email.discrepanciesCount !== undefined && email.discrepanciesCount > 0 && (
+                              <span className="font-bold text-red-600">
+                                {email.discrepanciesCount} Discrepancies
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Quick Flag Button */}
+                        <button
+                          onClick={(e) => toggleFlag(email.id, e)}
+                          className={`opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-200 transition-opacity cursor-pointer ${
+                            isFlagged ? '!opacity-100 text-amber-500' : 'text-slate-400'
+                          }`}
+                          title={isFlagged ? 'Unflag message' : 'Flag message'}
+                        >
+                          <Flag className={`w-3.5 h-3.5 ${isFlagged ? 'fill-amber-500' : ''}`} />
+                        </button>
                       </div>
-                      <div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Pane 3: Right Reading Pane (Col span 6) */}
+          <div className="lg:col-span-6 flex flex-col bg-white overflow-hidden">
+            {selectedEmail ? (
+              <div className="flex flex-col h-full overflow-hidden">
+                
+                {/* Outlook Action Bar (Reply, Reply All, Forward, PICC, Audit) */}
+                <div className="bg-[#f8f9fa] border-b border-slate-200 px-5 py-2 flex items-center justify-between gap-3 select-none">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => onNavigateToManager(selectedEmail.toEmail)}
+                      className="px-2.5 py-1.5 hover:bg-slate-200 text-slate-700 rounded transition-colors inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                      title="Reply & Open in Manager Review Desk"
+                    >
+                      <Reply className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Reply</span>
+                    </button>
+
+                    <button 
+                      onClick={() => onNavigateToManager(selectedEmail.toEmail)}
+                      className="px-2.5 py-1.5 hover:bg-slate-200 text-slate-700 rounded transition-colors inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                      title="Reply All to Stakeholders"
+                    >
+                      <ReplyAll className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Reply all</span>
+                    </button>
+
+                    <button 
+                      onClick={() => handleCopyLink(getToolUrl(selectedEmail))}
+                      className="px-2.5 py-1.5 hover:bg-slate-200 text-slate-700 rounded transition-colors inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                      title="Forward direct deep-link"
+                    >
+                      <Forward className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Forward</span>
+                    </button>
+
+                    <div className="h-4 w-[1px] bg-slate-300 mx-1"></div>
+
+                    {onOpenPdfReport && (
+                      <button
+                        onClick={() => onOpenPdfReport(selectedEmail.batchId)}
+                        className="px-2.5 py-1.5 hover:bg-slate-200 text-slate-700 rounded transition-colors inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                        title="Print / Export PDF Audit Report"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Print Report</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleCopyLink(getToolUrl(selectedEmail))}
+                      className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded text-xs font-medium inline-flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                      title="Copy direct deep-link URL"
+                    >
+                      {copiedUrl ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span className="text-emerald-700 font-bold text-[11px]">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-slate-400" />
+                          <span className="text-[11px]">Copy Link</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Email Header Info (Outlook Style) */}
+                <div className="px-6 py-4 border-b border-slate-100 bg-white">
+                  {/* Subject Headline */}
+                  <h1 className="text-lg font-bold text-slate-900 leading-snug tracking-tight">
+                    {selectedEmail.subject}
+                  </h1>
+
+                  {/* Sender Details with Outlook Contact Card Styling */}
+                  <div className="flex items-start gap-3 mt-3">
+                    <div className={`w-10 h-10 rounded-full ${getAvatarColor(selectedEmail.toName || 'AB')} flex items-center justify-center text-sm font-bold shadow-xs text-white`}>
+                      {getInitials(selectedEmail.toName)}
+                    </div>
+
+                    <div className="flex-1 min-w-0 text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-sm">
+                            {selectedEmail.fromName || 'AB Company Central Invoicing Automation'}
+                          </span>
+                          <span className="text-slate-400 font-normal">
+                            &lt;{selectedEmail.fromEmail || 'no-reply-ariba@abcompany.com'}&gt;
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          {new Date(selectedEmail.sentAt).toLocaleString([], { 
+                            weekday: 'short', 
+                            month: 'numeric', 
+                            day: 'numeric', 
+                            year: 'numeric',
+                            hour: 'numeric', 
+                            minute: '2-digit' 
+                          })}
+                        </span>
+                      </div>
+
+                      <div className="text-slate-600 mt-0.5">
                         <span className="text-slate-400">To: </span>
-                        <span className="font-medium text-slate-800">{selectedEmail.toName} &lt;{selectedEmail.toEmail}&gt;</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400">Date: </span>
-                        <span className="text-slate-700">{new Date(selectedEmail.sentAt).toUTCString()}</span>
+                        <span className="font-semibold text-slate-800">{selectedEmail.toName}</span>
+                        <span className="text-slate-500"> &lt;{selectedEmail.toEmail}&gt;</span>
                       </div>
                     </div>
                   </div>
 
-                  <span className="px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] rounded-full font-bold border border-emerald-100 uppercase flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    <span>Delivered</span>
-                  </span>
-                </div>
-
-                {/* Direct Action Link Banner */}
-                {selectedEmail.isClearanceNotification ? (
-                  <div className="pt-3 border-t border-slate-200">
-                    <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-3.5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+                  {/* Outlook Attachment Card (Excel or PDF) */}
+                  <div className="mt-4 pt-3 border-t border-slate-100">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
+                      Attachments (1)
+                    </span>
+                    <div className="inline-flex items-center gap-3 p-2 bg-[#f8f9fa] border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors shadow-2xs">
+                      {selectedEmail.isClearanceNotification ? (
+                        <FileCheck className="w-6 h-6 text-emerald-600" />
+                      ) : (
+                        <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
+                      )}
                       <div>
-                        <div className="flex items-center gap-1.5 font-bold text-xs">
-                          <Award className="w-4 h-4 text-emerald-200" />
-                          <span>Pre-Invoice Clearance Certificate (PICC) Ready for SAP Ariba</span>
-                        </div>
-                        <p className="text-[11px] text-emerald-100 mt-0.5">
-                          100% managerial sign-off achieved. Pre-invoice clearance code generated for touchless Ariba 3-way matching.
-                        </p>
+                        <span className="text-xs font-bold text-slate-800 block">
+                          {selectedEmail.isClearanceNotification 
+                            ? `PICC_Clearance_${selectedEmail.clearanceCertificateId || 'CERT'}.xlsx`
+                            : `PO_Reconciliation_Variance_${selectedEmail.poNumber}.xlsx`}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          48.2 KB • Microsoft Excel Worksheet
+                        </span>
                       </div>
-
-                      <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        {onOpenClearanceCertificate && (
-                          <button
-                            id="view-clearance-cert-btn"
-                            onClick={() => onOpenClearanceCertificate(selectedEmail.batchId)}
-                            className="bg-white hover:bg-emerald-50 text-emerald-800 font-bold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition-all inline-flex items-center gap-1.5"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>View PICC Certificate</span>
-                          </button>
-                        )}
-
+                      <div className="flex items-center gap-1.5 pl-3 border-l border-slate-200">
                         {onOpenPdfReport && (
-                          <button
-                            id="export-clearance-pdf-btn"
+                          <button 
                             onClick={() => onOpenPdfReport(selectedEmail.batchId)}
-                            className="bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/40 transition-all inline-flex items-center gap-1.5"
-                            title="Download PDF Audit Report"
+                            className="px-2 py-1 text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer"
                           >
-                            <Download className="w-3.5 h-3.5 text-emerald-200" />
-                            <span>PDF Audit</span>
+                            Preview
                           </button>
                         )}
-
-                        {selectedEmail.actionRequiredLink === 'vendor' && onNavigateToVendor && (
-                          <button
-                            onClick={onNavigateToVendor}
-                            className="bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/40 transition-all inline-flex items-center gap-1.5"
+                        {onOpenClearanceCertificate && (
+                          <button 
+                            onClick={() => onOpenClearanceCertificate(selectedEmail.batchId)}
+                            className="px-2 py-1 text-[11px] font-semibold text-[#0078D4] hover:underline cursor-pointer"
                           >
-                            <Building2 className="w-3.5 h-3.5" />
-                            <span>Vendor Portal</span>
-                          </button>
-                        )}
-
-                        {selectedEmail.actionRequiredLink === 'finance' && onNavigateToFinance && (
-                          <button
-                            onClick={onNavigateToFinance}
-                            className="bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/40 transition-all inline-flex items-center gap-1.5"
-                          >
-                            <FileCheck className="w-3.5 h-3.5" />
-                            <span>Finance Desk</span>
+                            View
                           </button>
                         )}
                       </div>
                     </div>
+                  </div>
+                </div>
 
-                    {/* Copyable SAP Ariba Submission Code & Verification Hash */}
-                    <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <div className="flex items-center justify-between gap-2 bg-emerald-50/70 p-2 rounded-lg border border-emerald-200">
-                        <div className="min-w-0 flex items-center gap-1.5">
-                          <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider shrink-0">
-                            Ariba Token:
-                          </span>
-                          <span className="font-mono font-bold text-emerald-900 text-xs truncate select-all">
-                            {selectedEmail.aribaSubmissionCode || 'ARIBA-PICC-CLEARED'}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => handleCopyLink(selectedEmail.aribaSubmissionCode || '')}
-                          className="p-1 px-2 bg-white hover:bg-emerald-100 text-emerald-800 rounded text-[11px] font-medium border border-emerald-200 inline-flex items-center gap-1 shrink-0 transition-colors"
-                          title="Copy SAP Ariba submission code"
-                        >
-                          {copiedUrl ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-emerald-600" />}
-                          <span>Copy</span>
-                        </button>
+                {/* Email Body Template (Corporate Microsoft Segoe UI Flow) */}
+                <div className="flex-1 overflow-y-auto p-6 text-xs text-slate-800 space-y-5 bg-white">
+                  
+                  {/* Status Banner */}
+                  {selectedEmail.isClearanceNotification ? (
+                    <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/70 text-emerald-950 flex items-start gap-3 shadow-2xs">
+                      <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <Award className="w-5 h-5" />
                       </div>
-
-                      <div className="flex items-center justify-between gap-2 bg-slate-100/80 p-2 rounded-lg border border-slate-200">
-                        <div className="min-w-0 flex items-center gap-1.5">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider shrink-0">
-                            Certificate ID:
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-xs uppercase tracking-wider text-emerald-900">
+                            Pre-Invoice Clearance Certificate (PICC) Ready
                           </span>
-                          <span className="font-mono text-slate-800 text-xs truncate select-all">
+                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-mono font-bold border border-emerald-200">
                             {selectedEmail.clearanceCertificateId || 'AB-PICC-2026'}
                           </span>
                         </div>
-                        <button
-                          onClick={() => handleCopyLink(selectedEmail.clearanceCertificateId || '')}
-                          className="p-1 px-2 bg-white hover:bg-slate-50 text-slate-700 rounded text-[11px] font-medium border border-slate-200 inline-flex items-center gap-1 shrink-0 transition-colors"
-                          title="Copy PICC certificate ID"
-                        >
-                          {copiedUrl ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-slate-500" />}
-                          <span>Copy</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="pt-3 border-t border-slate-200">
-                    <div className="bg-blue-600 text-white p-3.5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
-                      <div>
-                        <div className="flex items-center gap-1.5 font-bold text-xs">
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>Direct Link to Manager Review Desk</span>
-                        </div>
-                        <p className="text-[11px] text-blue-100 mt-0.5">
-                          Authorize consultant variances and sign-off on timesheet reconciliations directly in the tool.
+                        <p className="text-[11px] text-emerald-800 leading-relaxed mt-1">
+                          100% managerial sign-off achieved. Pre-invoice clearance code generated for touchless Ariba 3-way matching.
                         </p>
                       </div>
-
-                      <button
-                        id="email-review-link-btn"
-                        onClick={() => onNavigateToManager(selectedEmail.toEmail)}
-                        className="bg-white hover:bg-blue-50 text-blue-700 font-bold px-4 py-2 rounded-lg text-xs shadow-sm transition-all inline-flex items-center gap-1.5 shrink-0"
-                      >
-                        <span>Open Review Desk</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
                     </div>
-
-                    {/* Copyable Direct Link URL */}
-                    <div className="mt-2.5 flex items-center gap-2 bg-slate-100/80 p-2 rounded-lg border border-slate-200 text-xs">
-                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider shrink-0">
-                        Tool Link:
-                      </span>
-                      <span className="font-mono text-[11px] text-slate-700 truncate select-all flex-1">
-                        {getToolUrl(selectedEmail)}
-                      </span>
-                      <button
-                        id="copy-tool-link-btn"
-                        onClick={() => handleCopyLink(getToolUrl(selectedEmail))}
-                        className="p-1 px-2 bg-white hover:bg-slate-50 text-slate-700 rounded text-[11px] font-medium border border-slate-200 inline-flex items-center gap-1 shrink-0 transition-colors"
-                        title="Copy link to clipboard"
-                      >
-                        {copiedUrl ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            <span className="text-emerald-700 font-bold">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3 text-slate-500" />
-                            <span>Copy URL</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Email Body Template */}
-              {selectedEmail.isClearanceNotification ? (
-                <div className="p-6 text-xs text-slate-700 space-y-5 flex-1 overflow-y-auto max-h-[580px]">
-                  {/* Clearance Status Hero Banner */}
-                  <div className="p-4 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 text-emerald-950 flex items-start gap-3 shadow-2xs">
-                    <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                      <Award className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-bold text-sm uppercase tracking-wider text-emerald-900">
-                          PICC CERTIFICATE ISSUED • CLEARED FOR SAP ARIBA
-                        </span>
-                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-mono font-bold border border-emerald-200">
-                          {selectedEmail.clearanceCertificateId || 'AB-PICC-2026'}
-                        </span>
+                  ) : selectedEmail.isReminder ? (
+                    <div className={`p-4 rounded-xl border flex items-start gap-3 shadow-2xs ${
+                      selectedEmail.urgency === 'CRITICAL'
+                        ? 'bg-rose-50 border-rose-200 text-rose-950'
+                        : selectedEmail.urgency === 'URGENT'
+                        ? 'bg-amber-50 border-amber-200 text-amber-950'
+                        : 'bg-blue-50 border-blue-200 text-blue-950'
+                    }`}>
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 shadow-xs text-white ${
+                        selectedEmail.urgency === 'CRITICAL'
+                          ? 'bg-rose-600'
+                          : selectedEmail.urgency === 'URGENT'
+                          ? 'bg-amber-600'
+                          : 'bg-blue-600'
+                      }`}>
+                        <BellRing className="w-5 h-5" />
                       </div>
-                      <p className="text-[11px] text-emerald-800 leading-relaxed mt-1">
-                        {selectedEmail.actionRequiredLink === 'vendor'
-                          ? 'Your timesheet billing reconciliation has reached 100% sign-off. You are formally authorized to submit your tax invoice in the SAP Ariba Network.'
-                          : 'Vendor timesheet billing batch has completed all manager approvals. Pre-invoice clearance code is generated for touchless 3-way invoice ingestion.'}
-                      </p>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-xs uppercase tracking-wider">
+                            ACTION REQUIRED: APPROVAL SLA EXPIRING
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-white/80 border border-current">
+                            {selectedEmail.urgency || 'REMINDER'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] mt-1 leading-relaxed opacity-90">
+                          {selectedEmail.reminderMessage || 'Resource managers are requested to sign off on pending timesheet days to prevent vendor invoice rejection in SAP Ariba.'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="p-4 rounded-xl border border-purple-200 bg-purple-50/70 text-purple-950 flex items-start gap-3 shadow-2xs">
+                      <div className="w-9 h-9 rounded-lg bg-purple-700 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <AlertCircle className="w-5 h-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="font-bold text-xs uppercase tracking-wider text-purple-900 block">
+                          ACTION REQUIRED: INVOICE VARIANCE REVIEW
+                        </span>
+                        <p className="text-[11px] text-purple-800 leading-relaxed mt-1">
+                          A supplier has submitted invoice data for Purchase Order <strong className="font-mono">{selectedEmail.poNumber}</strong> with {selectedEmail.discrepanciesCount || 1} discrepancies requiring your managerial decision.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                  {/* Email Salutation */}
-                  <div className="space-y-1">
-                    <p className="font-semibold text-slate-800">Dear {selectedEmail.toName},</p>
-                    <p className="text-slate-600 leading-relaxed">
+                  {/* Body Salutation & Narrative */}
+                  <div className="space-y-2">
+                    <p className="font-bold text-slate-900">Dear {selectedEmail.toName},</p>
+                    <p className="text-slate-700 leading-relaxed">
                       {selectedEmail.contentBody ? (
                         <span className="whitespace-pre-line">{selectedEmail.contentBody}</span>
                       ) : (
                         <>
-                          The automated pre-invoice reconciliation workflow for Purchase Order <strong className="text-slate-900 font-mono">{selectedEmail.poNumber}</strong> (Period: <strong>{selectedEmail.billingMonth || '2026-08'}</strong>) from vendor <strong className="text-slate-900">{selectedEmail.vendorName || 'Apex Global Solutions'}</strong> has achieved full sign-off.
+                          The pre-invoice reconciliation workflow for Purchase Order <strong className="font-mono text-slate-900">{selectedEmail.poNumber}</strong> (Billing Month: <strong>{selectedEmail.billingMonth || '2026-08'}</strong>) from vendor <strong className="text-slate-900">{selectedEmail.vendorName || 'Apex Global Solutions'}</strong> is pending your review.
                         </>
                       )}
                     </p>
                   </div>
 
-                  {/* Financial & Clearance Summary Cards */}
+                  {/* Financial Metrics Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Cleared Amount</span>
-                      <span className="text-base font-bold text-emerald-900 font-mono block mt-0.5">
-                        {formatCurrency(selectedEmail.totalClearedAmount || 0, selectedEmail.currency)}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Total Billed</span>
+                      <span className="text-sm font-bold text-slate-900 font-mono block mt-0.5">
+                        {formatCurrency(selectedEmail.financialImpact || 0, selectedEmail.currency)}
                       </span>
-                      <span className="text-[10px] text-emerald-600">Authorized for payment</span>
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Approved Days</span>
-                      <span className="text-base font-bold text-slate-800 font-mono block mt-0.5">
-                        {selectedEmail.totalClearedDays ?? selectedEmail.totalBilledDays ?? 0} d
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Discrepancies</span>
+                      <span className="text-sm font-bold text-red-600 font-mono block mt-0.5">
+                        {selectedEmail.discrepanciesCount || 0} Lines
                       </span>
-                      <span className="text-[10px] text-slate-500">Verified consultant days</span>
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Reconciled Lines</span>
-                      <span className="text-base font-bold text-slate-800 block mt-0.5">
-                        {selectedEmail.matchedCount || 1} / {selectedEmail.matchedCount || 1}
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Billing Month</span>
+                      <span className="text-sm font-bold text-slate-800 font-mono block mt-0.5">
+                        {selectedEmail.billingMonth || '2026-08'}
                       </span>
-                      <span className="text-[10px] text-slate-500">100% sign-off rate</span>
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Clearance Status</span>
-                      <span className="text-xs font-bold text-emerald-700 block mt-1 uppercase tracking-wide">
-                        {selectedEmail.clearedStatus === 'CLEARED_WITH_APPROVED_EXCEPTIONS' 
-                          ? 'Approved Exceptions' 
-                          : 'Exact 100% Match'}
-                      </span>
-                      <span className="text-[10px] text-slate-500">No open blockers</span>
-                    </div>
-                  </div>
-
-                  {/* Verification Token & Cryptographic Hash Details */}
-                  <div className="bg-slate-900 text-slate-100 rounded-xl p-4 shadow-sm space-y-3">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                      <div className="flex items-center gap-2">
-                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                          SAP Ariba Clearance Credentials & Audit Hash
-                        </span>
-                      </div>
-                      <span className="text-[10px] bg-emerald-950 text-emerald-400 px-2 py-0.5 rounded border border-emerald-800 font-mono">
-                        AUTHENTICATED
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">SAP Ariba Clearance Code</span>
-                        <span className="font-mono font-bold text-emerald-300 text-sm block mt-0.5 select-all">
-                          {selectedEmail.aribaSubmissionCode || 'ARIBA-PICC-2026-CLEARED'}
-                        </span>
-                        <span className="text-[10px] text-slate-400 mt-0.5 block">
-                          Enter this code in your SAP Ariba Network invoice header
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Authorized Sign-off</span>
-                        <span className="font-semibold text-slate-200 block mt-0.5">
-                          {selectedEmail.senderName || 'Resource Management Desk'}
-                        </span>
-                        <span className="font-mono text-[10px] text-slate-400 block truncate">
-                          {selectedEmail.senderEmail || 'manager@abcompany.com'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {selectedEmail.verificationAuditHash && (
-                      <div className="pt-2 border-t border-slate-800 text-[10px]">
-                        <span className="text-slate-400 uppercase font-bold tracking-wider block">Cryptographic SHA-256 Audit Hash:</span>
-                        <span className="font-mono text-slate-300 break-all select-all block mt-0.5 bg-slate-950/60 p-2 rounded border border-slate-800">
-                          {selectedEmail.verificationAuditHash}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Next Steps Guidance Card */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
-                    <div className="text-[11px] font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Mandatory Process Workflow Following Pre-Invoice Clearance</span>
-                    </div>
-                    <ol className="space-y-2 text-slate-600 text-[11px] list-decimal list-inside">
-                      <li>
-                        <strong className="text-slate-800">SAP Ariba Network Invoicing:</strong> Vendor submits the final commercial invoice referencing clearance token <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{selectedEmail.aribaSubmissionCode || 'PICC-CODE'}</code>.
-                      </li>
-                      <li>
-                        <strong className="text-slate-800">Zero-Touch 3-Way Matching:</strong> AB Company's ERP (SAP S/4HANA & Ariba) matches the line amounts against this cleared certificate, bypassing manual AP routing.
-                      </li>
-                      <li>
-                        <strong className="text-slate-800">Disbursement:</strong> Cleared batches enter automated payment scheduling per standard vendor payment terms.
-                      </li>
-                    </ol>
-                  </div>
-
-                  {/* Action Footer */}
-                  <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div>
-                      <p className="text-slate-500 italic text-[11px]">
-                        Best regards,<br />
-                        AB Company Accounts Payable & Invoicing Automation Service<br />
-                        Corporate Procurement Governance Desk
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {onOpenClearanceCertificate && (
-                        <button
-                          onClick={() => onOpenClearanceCertificate(selectedEmail.batchId)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-xs transition-colors inline-flex items-center gap-1.5"
-                        >
-                          <Award className="w-3.5 h-3.5" />
-                          <span>Open Certificate (PICC)</span>
-                        </button>
-                      )}
-
-                      {onOpenPdfReport && (
-                        <button
-                          onClick={() => onOpenPdfReport(selectedEmail.batchId)}
-                          className="bg-white hover:bg-slate-100 text-slate-700 font-bold px-3 py-2 rounded-lg text-xs border border-slate-300 transition-colors inline-flex items-center gap-1.5"
-                        >
-                          <Download className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Audit PDF</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : selectedEmail.isReminder ? (
-                <div className="p-6 text-xs text-slate-700 space-y-5 flex-1 overflow-y-auto max-h-[580px]">
-                  
-                  {/* Reminder Priority Banner */}
-                  <div className={`p-4 rounded-xl border flex items-start gap-3 ${
-                    selectedEmail.urgency === 'CRITICAL'
-                      ? 'bg-rose-50 border-rose-200 text-rose-900'
-                      : selectedEmail.urgency === 'URGENT'
-                      ? 'bg-amber-50 border-amber-200 text-amber-900'
-                      : 'bg-blue-50 border-blue-200 text-blue-900'
-                  }`}>
-                    {selectedEmail.urgency === 'CRITICAL' ? (
-                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                    ) : (
-                      <BellRing className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                    )}
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm uppercase tracking-wider">
-                          {selectedEmail.urgency || 'PRIORITY'} STAKEHOLDER NUDGE
-                        </span>
-                        {selectedEmail.senderRole && (
-                          <span className="px-2 py-0.5 bg-white/80 rounded text-[10px] font-bold border border-slate-300 uppercase">
-                            FROM: {selectedEmail.senderRole}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] leading-relaxed">
-                        This communication was dispatched directly by a verified stakeholder to accelerate timesheet reconciliation and clearance before the ERP cutoff.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Reminder Metadata Cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Sender</span>
-                      <span className="text-xs font-bold text-slate-800 block mt-0.5 truncate">
-                        {selectedEmail.fromName || selectedEmail.fromEmail}
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono block">{selectedEmail.fromEmail}</span>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Recipient</span>
-                      <span className="text-xs font-bold text-slate-800 block mt-0.5 truncate">
-                        {selectedEmail.toName}
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono block">{selectedEmail.toEmail}</span>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Purchase Order</span>
-                      <span className="text-xs font-bold font-mono text-slate-800 block mt-0.5">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">PO Reference</span>
+                      <span className="text-sm font-bold text-[#0078D4] font-mono block mt-0.5 truncate">
                         {selectedEmail.poNumber}
                       </span>
-                      <span className="text-[10px] text-slate-500 block">Period: {selectedEmail.billingMonth || '2026-08'}</span>
                     </div>
                   </div>
 
-                  {/* Message Content Box */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-3">
-                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                      Message Body
-                    </div>
-                    <div className="text-xs text-slate-800 leading-relaxed whitespace-pre-line font-sans bg-slate-50/50 p-4 rounded-lg border border-slate-100">
-                      {selectedEmail.reminderMessage || selectedEmail.previewText}
-                    </div>
-                  </div>
-
-                  {/* Navigation Call-to-Action Buttons */}
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <div>
-                      <span className="font-bold text-slate-800 text-xs block">Required Action</span>
-                      <span className="text-[11px] text-slate-500">
-                        {selectedEmail.senderRole === 'vendor' 
-                          ? 'Review pending consultant timesheet variances in your queue.'
-                          : 'Review rejected lines or confirm timesheet records in the portal.'}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => onNavigateToManager(selectedEmail.toEmail)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-xs transition-colors inline-flex items-center gap-1.5"
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                        <span>Open Manager Review Desk</span>
-                      </button>
-
-                      {onNavigateToVendor && (
-                        <button
-                          onClick={onNavigateToVendor}
-                          className="bg-white hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg text-xs border border-slate-300 transition-colors inline-flex items-center gap-1.5"
-                        >
-                          <Building2 className="w-3.5 h-3.5 text-purple-600" />
-                          <span>Open Vendor Portal</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                </div>
-              ) : (
-              <div className="p-6 text-xs text-slate-700 space-y-5 flex-1 overflow-y-auto max-h-[580px]">
-                <div className="border-l-4 border-blue-600 pl-3 py-1 bg-blue-50/40 rounded-r-lg">
-                  <p className="font-bold text-slate-900">
-                    Automated Alert: Action Required for AB Company Timesheet Reconciliation
-                  </p>
-                  <p className="text-slate-600 text-[11px] mt-0.5">
-                    Vendor <strong className="text-slate-800">{selectedEmail.vendorName || 'Apex Global Solutions'}</strong> has initiated an approval workflow requiring your review as Resource Manager.
-                  </p>
-                </div>
-
-                {/* Email Greeting */}
-                <div className="space-y-1">
-                  <p className="font-semibold text-slate-800">Dear {selectedEmail.toName},</p>
-                  <p className="text-slate-600 leading-relaxed">
-                    The AB Company Automated Invoicing Engine has processed the monthly consultant timesheet upload for 
-                    Purchase Order <span className="font-mono font-bold text-slate-900">{selectedEmail.poNumber}</span> (Billing Period: <strong>{selectedEmail.billingMonth || '2026-08'}</strong>). 
-                    Below is the executive summary of data requiring your direct authorization before an SAP Ariba pre-invoice clearance can be generated.
-                  </p>
-                </div>
-
-                {/* KPI Summary Cards inside Email */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Vendor</span>
-                    <span className="text-xs font-bold text-slate-800 truncate block mt-0.5">
-                      {selectedEmail.vendorName || 'Apex Global Solutions'}
-                    </span>
-                  </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Billing Period</span>
-                    <span className="text-xs font-bold text-slate-800 block mt-0.5">
-                      {selectedEmail.billingMonth || 'August 2026'}
-                    </span>
-                  </div>
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                    <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Discrepancies</span>
-                    <span className="text-sm font-bold text-amber-900 block mt-0.5">
-                      {selectedEmail.discrepanciesCount} Flagged Items
-                    </span>
-                  </div>
-                  <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                    <span className="text-[10px] font-bold text-red-700 uppercase tracking-wider block">Variance Exposure</span>
-                    <span className="text-sm font-bold text-red-900 block mt-0.5">
-                      {formatCurrency(selectedEmail.financialImpact, selectedEmail.currency)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Structured Data Requiring Approval Table */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
-                  <div className="bg-slate-50 p-3 border-b border-slate-200 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-3.5 h-3.5 text-blue-600" />
-                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                        Summary of Data Requiring Manager Approval
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-mono text-slate-500 font-medium">
-                      PO: {selectedEmail.poNumber}
-                    </span>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-slate-100/70 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                          <th className="py-2.5 px-3">Resource</th>
-                          <th className="py-2.5 px-3">AB Approved</th>
-                          <th className="py-2.5 px-3">Vendor Claim</th>
-                          <th className="py-2.5 px-3">Variance Days</th>
-                          <th className="py-2.5 px-3">Rate</th>
-                          <th className="py-2.5 px-3 text-right">Financial Variance</th>
-                          <th className="py-2.5 px-3">Status / Flag</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {selectedEmail.itemsSummary && selectedEmail.itemsSummary.length > 0 ? (
-                          selectedEmail.itemsSummary.map((item, idx) => (
-                            <tr key={item.id || idx} className="hover:bg-slate-50/50">
-                              <td className="py-2.5 px-3">
-                                <div className="font-bold text-slate-800">{item.resourceName}</div>
-                                <div className="text-[10px] text-slate-400 font-mono truncate">{item.resourceEmail}</div>
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-700">
-                                {item.internalApprovedDays} d
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900">
-                                {item.billedDays} d
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold">
-                                {item.daysVariance > 0 ? (
-                                  <span className="text-red-600">+{item.daysVariance} d</span>
-                                ) : item.daysVariance < 0 ? (
-                                  <span className="text-blue-600">{item.daysVariance} d</span>
-                                ) : (
-                                  <span className="text-emerald-600">0 d (Match)</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3 font-mono text-slate-600">
-                                {formatCurrency(item.contractDailyRate, selectedEmail.currency)}
-                              </td>
-                              <td className="py-2.5 px-3 font-mono font-bold text-right">
-                                {item.financialVarianceAmount > 0 ? (
-                                  <span className="text-red-600">+{formatCurrency(item.financialVarianceAmount, selectedEmail.currency)}</span>
-                                ) : (
-                                  <span className="text-slate-400">$0.00</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
-                                  item.discrepancyType === 'PERFECT_MATCH'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : item.discrepancyType === 'DAYS_OVERBILLED'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {item.discrepancyType.replace(/_/g, ' ')}
-                                </span>
-                              </td>
+                  {/* Detailed Discrepancy Table */}
+                  {selectedEmail.discrepancyItems && selectedEmail.discrepancyItems.length > 0 && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                      <div className="bg-slate-50 px-3.5 py-2 border-b border-slate-200 font-bold text-xs text-slate-800">
+                        Pending Line Items & Variance Breakdown
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead className="bg-slate-100/70 text-slate-600 text-[10px] uppercase font-bold border-b border-slate-200">
+                            <tr>
+                              <th className="py-2 px-3">Resource</th>
+                              <th className="py-2 px-3">AB Days</th>
+                              <th className="py-2 px-3">Billed</th>
+                              <th className="py-2 px-3">Variance</th>
+                              <th className="py-2 px-3">Rate</th>
+                              <th className="py-2 px-3 text-right">Exposure</th>
                             </tr>
-                          ))
-                        ) : (
-                          // Fallback default demonstration summary when itemsSummary wasn't provided
-                          <>
-                            <tr className="hover:bg-slate-50/50">
-                              <td className="py-2.5 px-3">
-                                <div className="font-bold text-slate-800">Priya Nair</div>
-                                <div className="text-[10px] text-slate-400 font-mono">priya.nair@apexconsulting.com</div>
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-700">18 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900">22 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-red-600">+4 d</td>
-                              <td className="py-2.5 px-3 font-mono text-slate-600">{formatCurrency(920, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3 font-mono font-bold text-red-600 text-right">+{formatCurrency(3680, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3">
-                                <span className="inline-block text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-red-100 text-red-800">
-                                  DAYS OVERBILLED
-                                </span>
-                              </td>
-                            </tr>
-                            <tr className="hover:bg-slate-50/50">
-                              <td className="py-2.5 px-3">
-                                <div className="font-bold text-slate-800">Lucas Silva</div>
-                                <div className="text-[10px] text-slate-400 font-mono">lucas.silva@apexconsulting.com</div>
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-700">15 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900">15 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-500">0 d</td>
-                              <td className="py-2.5 px-3 font-mono text-slate-600">{formatCurrency(800, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3 font-mono font-bold text-amber-600 text-right">+{formatCurrency(1500, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3">
-                                <span className="inline-block text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-amber-100 text-amber-800">
-                                  RATE MISMATCH
-                                </span>
-                              </td>
-                            </tr>
-                            <tr className="hover:bg-slate-50/50">
-                              <td className="py-2.5 px-3">
-                                <div className="font-bold text-slate-800">Darren Hayes</div>
-                                <div className="text-[10px] text-slate-400 font-mono">darren.hayes@contractor.com</div>
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-700">0 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900">12 d</td>
-                              <td className="py-2.5 px-3 font-semibold text-red-600">+12 d</td>
-                              <td className="py-2.5 px-3 font-mono text-slate-600">{formatCurrency(850, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3 font-mono font-bold text-red-600 text-right">+{formatCurrency(10200, selectedEmail.currency)}</td>
-                              <td className="py-2.5 px-3">
-                                <span className="inline-block text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-red-100 text-red-800">
-                                  UNMAPPED CONSULTANT
-                                </span>
-                              </td>
-                            </tr>
-                          </>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {selectedEmail.discrepancyItems.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/50">
+                                <td className="py-2 px-3">
+                                  <div className="font-bold text-slate-800">{item.resourceName}</div>
+                                  <div className="text-[10px] text-slate-400 font-mono">{item.resourceEmail}</div>
+                                </td>
+                                <td className="py-2 px-3 font-mono">{item.internalApprovedDays} d</td>
+                                <td className="py-2 px-3 font-mono">{item.billedDays} d</td>
+                                <td className="py-2 px-3 font-mono font-bold text-red-600">
+                                  {item.daysVariance > 0 ? `+${item.daysVariance} d` : `${item.daysVariance} d`}
+                                </td>
+                                <td className="py-2 px-3 font-mono text-slate-600">
+                                  {formatCurrency(item.contractDailyRate, selectedEmail.currency)}
+                                </td>
+                                <td className="py-2 px-3 font-mono font-bold text-red-600 text-right">
+                                  {formatCurrency(item.financialVarianceAmount, selectedEmail.currency)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
-                {/* Manager Action Options Card */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
-                  <div className="text-[11px] font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Authorized Review Actions in Tool</span>
-                  </div>
-                  <ul className="space-y-1.5 text-slate-600 text-[11px] list-disc list-inside">
-                    <li>
-                      <strong className="text-slate-800">Approve Variance:</strong> Authorize offline overtime or sprint milestones with mandatory business justification notes.
-                    </li>
-                    <li>
-                      <strong className="text-slate-800">Adjust to Internal Timesheet:</strong> Cap the billing at the internal approved timesheet days, generating an automatic credit.
-                    </li>
-                    <li>
-                      <strong className="text-slate-800">Reject Line Item:</strong> Send the item back to the vendor with reason notes, preventing invoice clearance until a corrected file is submitted.
-                    </li>
-                  </ul>
-                </div>
-
-                {/* Footer with Direct CTA */}
-                <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div>
-                    <p className="text-slate-500 italic text-[11px]">
-                      Best regards,<br />
+                  {/* Primary CTA in Email Body */}
+                  <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="text-slate-500 text-[11px] leading-relaxed">
                       AB Company Accounts Payable & Invoicing Automation Service<br />
                       Corporate Procurement Governance Desk
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => onNavigateToManager(selectedEmail.toEmail)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-xs transition-colors inline-flex items-center gap-1.5"
-                  >
-                    <span>Authorize as {selectedEmail.toName}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-              )}
+                    </div>
 
-            </div>
-          ) : (
-            <div className="p-12 text-center text-slate-400 text-xs flex flex-col items-center justify-center h-full">
-              <Mail className="w-10 h-10 text-slate-300 mb-2" />
-              <span>Select an email from the left pane to view the full notification payload.</span>
-            </div>
-          )}
+                    <button
+                      onClick={() => onNavigateToManager(selectedEmail.toEmail)}
+                      className="px-5 py-2.5 bg-[#0078D4] hover:bg-[#106ebe] text-white rounded-lg font-bold text-xs shadow-sm transition-colors inline-flex items-center gap-2 cursor-pointer shrink-0"
+                    >
+                      <span>Open Review Desk</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            ) : (
+              <div className="p-12 text-center text-slate-400 text-xs flex flex-col items-center justify-center h-full">
+                <Mail className="w-12 h-12 text-slate-300 mb-2" />
+                <span className="font-bold text-slate-600 text-sm">Select an email to read</span>
+                <span className="text-[11px] text-slate-400 mt-1">Nothing is selected in your Outlook reading pane.</span>
+              </div>
+            )}
+          </div>
+
         </div>
 
       </div>

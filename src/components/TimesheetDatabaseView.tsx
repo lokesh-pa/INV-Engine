@@ -13,7 +13,9 @@ import {
   AlertTriangle,
   MapPin,
   Briefcase,
-  Layers
+  Layers,
+  Lock,
+  ShieldAlert
 } from 'lucide-react';
 import { InternalTimesheet, Currency, UserProfile } from '../types';
 import { formatCurrency } from '../utils/reconciliationEngine';
@@ -191,39 +193,55 @@ export const TimesheetDatabaseView: React.FC<TimesheetDatabaseViewProps> = ({
               <span>Timesheet Template</span>
             </button>
 
-            <button
-              id="timesheet-upload-btn"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isProcessing}
-              className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 px-3.5 py-2 rounded-lg text-xs font-medium shadow-2xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-              title="Upload / Re-Upload Timesheets from Excel or CSV file"
-            >
-              <UploadCloud className="w-3.5 h-3.5 text-indigo-600" />
-              <span>{isProcessing ? 'Processing File...' : 'Upload / Re-Upload Timesheets'}</span>
-            </button>
+            {currentUser.role === 'vendor' ? (
+              <div 
+                className="px-3.5 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 cursor-not-allowed"
+                title="Restricted: External vendors cannot modify internal company timesheet records"
+              >
+                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                <span>Upload Restricted (Internal Only)</span>
+              </div>
+            ) : (
+              <button
+                id="timesheet-upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessing}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                title="Upload / Re-Upload Timesheets from Excel or CSV file"
+              >
+                <UploadCloud className="w-3.5 h-3.5 text-white" />
+                <span>{isProcessing ? 'Processing File...' : 'Upload / Re-Upload Timesheets'}</span>
+              </button>
+            )}
 
-            {onResyncWithTimesheets && (
+            {onResyncWithTimesheets && currentUser.role !== 'vendor' && (
               <button
                 id="timesheet-resync-batches-btn"
                 onClick={onResyncWithTimesheets}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-lg text-xs font-medium shadow-xs transition-colors inline-flex items-center gap-1.5"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-lg text-xs font-medium shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
                 title="Retroactive Timesheet Diff: Re-verify all invoice batches against updated timesheet hours"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Re-Sync Batches with DB</span>
               </button>
             )}
-
-            <button
-              id="timesheet-add-entry-btn"
-              onClick={() => setShowAddModal(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-medium shadow-xs transition-colors inline-flex items-center gap-1.5"
-            >
-              <Plus className="w-3.5 h-3.5 text-white" />
-              <span>Add Timesheet Entry</span>
-            </button>
           </div>
         </div>
+
+        {/* Vendor Role Restriction Security Banner */}
+        {currentUser.role === 'vendor' && (
+          <div className="mt-4 p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-xs flex items-center justify-between gap-3 text-amber-900 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Vendor Read-Only Mode:</strong> Master timesheet uploads and modifications are restricted to AB Company Internal HR / Finance Administrators. Vendors can reference approved hours here to align their commercial invoices.
+              </span>
+            </div>
+            <span className="px-2 py-0.5 bg-amber-200 text-amber-950 text-[10px] font-bold rounded uppercase shrink-0">
+              Read-Only
+            </span>
+          </div>
+        )}
 
         {/* Status Message */}
         {statusMessage && (

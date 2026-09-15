@@ -10,6 +10,7 @@ import {
   TaxConfig,
   TaxCalculationResult
 } from '../types';
+import { parsePdfInvoice, ParsedPdfInvoice } from './pdfInvoiceParser';
 
 export const DEFAULT_TAX_CONFIG: TaxConfig = {
   taxType: 'VAT',
@@ -493,7 +494,7 @@ export function generatePreInvoiceClearance(
 /**
  * Format currency with proper symbol
  */
-export function formatCurrency(amount: number, currency: Currency = 'USD'): string {
+export function formatCurrency(amount: number | null | undefined, currency: Currency = 'USD'): string {
   const symbols: Record<Currency, string> = {
     USD: '$',
     EUR: '€',
@@ -501,6 +502,344 @@ export function formatCurrency(amount: number, currency: Currency = 'USD'): stri
     INR: '₹',
     SGD: 'S$'
   };
-  const symbol = symbols[currency] || '$';
-  return `${symbol}${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const symbol = (currency && symbols[currency]) ? symbols[currency] : '$';
+  const safeAmount = (typeof amount === 'number' && !isNaN(amount)) ? amount : 0;
+  return `${symbol}${Math.abs(safeAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
+
+export interface PdfLineComparison {
+  poLineItem: string;
+  resourceName: string;
+  resourceEmail: string;
+  pdfDays: number;
+  approvedDays: number;
+  daysVariance: number;
+  pdfRate: number;
+  approvedRate: number;
+  rateVariance: number;
+  pdfLineAmount: number;
+  approvedLineAmount: number;
+  amountVariance: number;
+  matchStatus: 'MATCH' | 'DAYS_MISMATCH' | 'RATE_MISMATCH' | 'UNAPPROVED_EXTRA_LINE' | 'MISSING_IN_PDF';
+  notes: string;
+}
+
+export interface PdfReconciliationResult {
+  pdfMetadata: {
+    invoiceNumber?: string;
+    poNumber?: string;
+    billingMonth?: string;
+    piccId?: string;
+    vendorName?: string;
+    totalAmount?: number;
+    totalDays?: number;
+    extractedLineCount: number;
+    pageCount: number;
+  };
+  poMapping: {
+    targetPoNumber: string;
+    targetVendorName: string;
+    targetBillingMonth: string;
+    mappedLinesCount: number;
+    unmappedLinesCount: number;
+  };
+  piccComparison: {
+    piccFound: boolean;
+    certificateId?: string;
+    aribaSubmissionCode?: string;
+    isPiccReferenced: boolean;
+    isPiccMatching: boolean;
+    clearedDaysInPicc: number;
+    pdfTotalDays: number;
+    daysDelta: number;
+    clearedAmountInPicc: number;
+    pdfTotalAmount: number;
+    amountDelta: number;
+    piccStatus?: string;
+    auditVerificationHash?: string;
+    isCompliant: boolean;
+    failureReasons: string[];
+  };
+  lineComparisons: PdfLineComparison[];
+  overallStatus: 'APPROVED_FOR_ARIBA' | 'DISCREPANCY_DETECTED' | 'PICC_MISMATCH_REJECTED';
+  reconciliationSummary: {
+    totalPdfDays: number;
+    totalApprovedDays: number;
+    netDaysVariance: number;
+    totalPdfAmount: number;
+    totalApprovedAmount: number;
+    netAmountVariance: number;
+    matchedLinesCount: number;
+    exceptionLinesCount: number;
+    missingLinesCount: number;
+    canPostGoodsReceipt: boolean;
+    recommendation: string;
+  };
+}
+
+/**
+ * Extracts tabular line-item data from a PDF commercial invoice,
+ * maps it directly to the Purchase Order (PO) structure, and compares it
+ * against the existing approved reconciliation data and Pre-Invoice Clearance Certificate (PICC).
+ */
+export async function extractAndReconcilePdfInvoice(
+  pdfBuffer: ArrayBuffer,
+  batch: InvoiceBatch,
+  piccOverride?: PreInvoiceClearance | null
+): Promise<PdfReconciliationResult> {
+  // 1. Extract table data and header metadata from PDF
+  const parsedPdf: ParsedPdfInvoice = await parsePdfInvoice(pdfBuffer);
+  const activePicc = piccOverride || batch.clearanceCertificate;
+
+  // 2. Map PDF lines to PO structure and compare with approved batch items
+  const lineComparisons: PdfLineComparison[] = [];
+  const matchedBatchItemIds = new Set<string>();
+
+  let totalPdfDays = 0;
+  let totalPdfAmount = 0;
+  let totalApprovedDays = 0;
+  let totalApprovedAmount = 0;
+  let mappedLinesCount = 0;
+  let unmappedLinesCount = 0;
+
+  // Normalizer helper for line items
+  const normalizeLineItem = (line?: string | number): string => {
+    if (!line) return '';
+    const clean = String(line).replace(/\D/g, '');
+    return clean ? clean.padStart(5, '0') : String(line).trim();
+  };
+
+  parsedPdf.lines.forEach((pdfLine, idx) => {
+    const rawPoLine = pdfLine['PO Line Item'] || pdfLine['Line Item'] || pdfLine['Item #'] || '';
+    const normalizedPoLine = normalizeLineItem(rawPoLine);
+    const pdfResourceName = String(pdfLine['Resource Name'] || pdfLine['Consultant'] || pdfLine['Resource'] || '').trim();
+    const pdfResourceEmail = String(pdfLine['Resource Email ID'] || pdfLine['Email'] || '').toLowerCase().trim();
+    const billedDays = Number(pdfLine['Billed Days'] ?? pdfLine['Days'] ?? pdfLine['Worked Days'] ?? 0);
+    const dailyRate = Number(pdfLine['Daily Rate'] ?? pdfLine['Rate'] ?? 0);
+    const lineAmount = Number(pdfLine['Total Amount'] ?? +(billedDays * dailyRate).toFixed(2));
+
+    totalPdfDays += billedDays;
+    totalPdfAmount += lineAmount;
+
+    // Find corresponding item in approved batch
+    let batchItem = batch.items.find(it => {
+      if (normalizedPoLine && it.poLineItem) {
+        return normalizeLineItem(it.poLineItem) === normalizedPoLine;
+      }
+      return false;
+    });
+
+    // Fallback match by email or name if line number not mapped
+    if (!batchItem && pdfResourceEmail) {
+      batchItem = batch.items.find(it => it.resourceEmail.toLowerCase().trim() === pdfResourceEmail);
+    }
+    if (!batchItem && pdfResourceName) {
+      batchItem = batch.items.find(it => it.resourceName.toLowerCase().trim() === pdfResourceName.toLowerCase());
+    }
+
+    if (batchItem) {
+      mappedLinesCount++;
+      matchedBatchItemIds.add(batchItem.id);
+
+      // Determine approved days and approved rate
+      const approvedDays = batchItem.managerDecision
+        ? batchItem.managerDecision.finalApprovedDays
+        : (batchItem.status === 'APPROVED_ROUTINE' ? batchItem.billedDays : batchItem.internalApprovedDays);
+
+      const approvedRate = batchItem.contractDailyRate || batchItem.claimedDailyRate;
+      const approvedAmount = +(approvedDays * approvedRate).toFixed(2);
+
+      totalApprovedDays += approvedDays;
+      totalApprovedAmount += approvedAmount;
+
+      const daysVariance = +(billedDays - approvedDays).toFixed(2);
+      const rateVariance = +(dailyRate - approvedRate).toFixed(2);
+      const amountVariance = +(lineAmount - approvedAmount).toFixed(2);
+
+      let matchStatus: PdfLineComparison['matchStatus'] = 'MATCH';
+      let notes = 'Billed days and rate match authorized clearance.';
+
+      if (batchItem.status === 'REJECTED_BY_MANAGER') {
+        matchStatus = 'DAYS_MISMATCH';
+        notes = `Line was rejected by manager (${batchItem.managerDecision?.justificationNotes || 'No justification'}).`;
+      } else if (Math.abs(daysVariance) > 0.01) {
+        matchStatus = 'DAYS_MISMATCH';
+        notes = daysVariance > 0 
+          ? `Overbilled by ${daysVariance} days beyond approved internal clearance (${approvedDays} approved).`
+          : `Underbilled by ${Math.abs(daysVariance)} days relative to approved clearance.`;
+      } else if (Math.abs(rateVariance) > 0.01) {
+        matchStatus = 'RATE_MISMATCH';
+        notes = `Daily rate (${dailyRate}) deviates from contracted rate card (${approvedRate}).`;
+      }
+
+      lineComparisons.push({
+        poLineItem: batchItem.poLineItem || normalizedPoLine || String((idx + 1) * 10).padStart(5, '0'),
+        resourceName: batchItem.resourceName || pdfResourceName,
+        resourceEmail: batchItem.resourceEmail || pdfResourceEmail,
+        pdfDays: billedDays,
+        approvedDays,
+        daysVariance,
+        pdfRate: dailyRate,
+        approvedRate,
+        rateVariance,
+        pdfLineAmount: lineAmount,
+        approvedLineAmount: approvedAmount,
+        amountVariance,
+        matchStatus,
+        notes
+      });
+    } else {
+      unmappedLinesCount++;
+      lineComparisons.push({
+        poLineItem: normalizedPoLine || `EXT-${idx + 1}`,
+        resourceName: pdfResourceName || `Unmapped Resource ${idx + 1}`,
+        resourceEmail: pdfResourceEmail || 'unmapped@vendor.com',
+        pdfDays: billedDays,
+        approvedDays: 0,
+        daysVariance: billedDays,
+        pdfRate: dailyRate,
+        approvedRate: 0,
+        rateVariance: dailyRate,
+        pdfLineAmount: lineAmount,
+        approvedLineAmount: 0,
+        amountVariance: lineAmount,
+        matchStatus: 'UNAPPROVED_EXTRA_LINE',
+        notes: 'Line item present in vendor PDF but not found in approved PO clearance.'
+      });
+    }
+  });
+
+  // Check for any missing lines (approved in batch but absent in PDF)
+  batch.items.forEach((item, idx) => {
+    if (!matchedBatchItemIds.has(item.id)) {
+      const approvedDays = item.managerDecision
+        ? item.managerDecision.finalApprovedDays
+        : (item.status === 'APPROVED_ROUTINE' ? item.billedDays : item.internalApprovedDays);
+      const approvedRate = item.contractDailyRate || item.claimedDailyRate;
+      const approvedAmount = +(approvedDays * approvedRate).toFixed(2);
+
+      totalApprovedDays += approvedDays;
+      totalApprovedAmount += approvedAmount;
+
+      lineComparisons.push({
+        poLineItem: item.poLineItem || String((idx + 1) * 10).padStart(5, '0'),
+        resourceName: item.resourceName,
+        resourceEmail: item.resourceEmail,
+        pdfDays: 0,
+        approvedDays,
+        daysVariance: -approvedDays,
+        pdfRate: 0,
+        approvedRate,
+        rateVariance: -approvedRate,
+        pdfLineAmount: 0,
+        approvedLineAmount: approvedAmount,
+        amountVariance: -approvedAmount,
+        matchStatus: 'MISSING_IN_PDF',
+        notes: 'Approved PO line item is omitted from the vendor commercial PDF.'
+      });
+    }
+  });
+
+  // 3. Compare against existing Pre-Invoice Clearance Certificate (PICC)
+  const failureReasons: string[] = [];
+  const piccFound = Boolean(activePicc);
+  const clearedDaysInPicc = activePicc?.totalClearedDays ?? 0;
+  const clearedAmountInPicc = activePicc?.totalClearedAmount ?? 0;
+  const daysDelta = +(totalPdfDays - clearedDaysInPicc).toFixed(2);
+  const amountDelta = +(totalPdfAmount - clearedAmountInPicc).toFixed(2);
+
+  const isPiccReferenced = Boolean(
+    parsedPdf.piccId && activePicc && parsedPdf.piccId.trim().toUpperCase() === activePicc.certificateId.trim().toUpperCase()
+  );
+
+  let isPiccMatching = true;
+  if (!activePicc) {
+    isPiccMatching = false;
+    failureReasons.push('No valid Pre-Invoice Clearance Certificate (PICC) generated for this PO yet.');
+  } else {
+    if (parsedPdf.piccId && parsedPdf.piccId.trim().toUpperCase() !== activePicc.certificateId.trim().toUpperCase()) {
+      isPiccMatching = false;
+      failureReasons.push(`PDF references certificate "${parsedPdf.piccId}" but approved batch PICC is "${activePicc.certificateId}".`);
+    }
+    if (Math.abs(daysDelta) > 0.01) {
+      isPiccMatching = false;
+      failureReasons.push(`Total billed days in PDF (${totalPdfDays}d) differs from PICC cleared days (${clearedDaysInPicc}d).`);
+    }
+    if (Math.abs(amountDelta) > 0.50) {
+      isPiccMatching = false;
+      failureReasons.push(`Total invoice net amount in PDF (${formatCurrency(totalPdfAmount, batch.currency)}) differs from PICC (${formatCurrency(clearedAmountInPicc, batch.currency)}).`);
+    }
+  }
+
+  // 4. Overall status and recommendation
+  const exceptionLinesCount = lineComparisons.filter(l => l.matchStatus !== 'MATCH').length;
+  const matchedLinesCount = lineComparisons.filter(l => l.matchStatus === 'MATCH').length;
+  const missingLinesCount = lineComparisons.filter(l => l.matchStatus === 'MISSING_IN_PDF').length;
+
+  const isCompliant = isPiccMatching && exceptionLinesCount === 0;
+
+  let overallStatus: PdfReconciliationResult['overallStatus'] = 'APPROVED_FOR_ARIBA';
+  let recommendation = 'Commercial invoice PDF strictly matches approved PICC. Goods Receipt (GR) and Service Entry Sheet (SES) can be safely posted in SAP Ariba.';
+
+  if (!isPiccMatching && failureReasons.length > 0) {
+    overallStatus = 'PICC_MISMATCH_REJECTED';
+    recommendation = `REJECT FOR ARIBA POSTING: Commercial PDF deviates from official Pre-Invoice Clearance Certificate. Reason: ${failureReasons.join(' ')}`;
+  } else if (exceptionLinesCount > 0) {
+    overallStatus = 'DISCREPANCY_DETECTED';
+    recommendation = `REJECT FOR ARIBA POSTING: Found ${exceptionLinesCount} line item discrepancies between the vendor PDF and approved PO clearance. Return to vendor for reissue.`;
+  }
+
+  return {
+    pdfMetadata: {
+      invoiceNumber: parsedPdf.invoiceNumber,
+      poNumber: parsedPdf.poNumber || batch.poNumber,
+      billingMonth: parsedPdf.billingMonth || batch.billingMonth,
+      piccId: parsedPdf.piccId,
+      vendorName: parsedPdf.vendorName || batch.vendorName,
+      totalAmount: totalPdfAmount,
+      totalDays: totalPdfDays,
+      extractedLineCount: parsedPdf.lines.length,
+      pageCount: parsedPdf.pageCount
+    },
+    poMapping: {
+      targetPoNumber: batch.poNumber,
+      targetVendorName: batch.vendorName,
+      targetBillingMonth: batch.billingMonth,
+      mappedLinesCount,
+      unmappedLinesCount
+    },
+    piccComparison: {
+      piccFound,
+      certificateId: activePicc?.certificateId,
+      aribaSubmissionCode: activePicc?.aribaSubmissionCode,
+      isPiccReferenced,
+      isPiccMatching,
+      clearedDaysInPicc,
+      pdfTotalDays: totalPdfDays,
+      daysDelta,
+      clearedAmountInPicc,
+      pdfTotalAmount: totalPdfAmount,
+      amountDelta,
+      piccStatus: activePicc?.status,
+      auditVerificationHash: activePicc?.verificationAuditHash,
+      isCompliant,
+      failureReasons
+    },
+    lineComparisons,
+    overallStatus,
+    reconciliationSummary: {
+      totalPdfDays: +totalPdfDays.toFixed(2),
+      totalApprovedDays: +totalApprovedDays.toFixed(2),
+      netDaysVariance: +(totalPdfDays - totalApprovedDays).toFixed(2),
+      totalPdfAmount: +totalPdfAmount.toFixed(2),
+      totalApprovedAmount: +totalApprovedAmount.toFixed(2),
+      netAmountVariance: +(totalPdfAmount - totalApprovedAmount).toFixed(2),
+      matchedLinesCount,
+      exceptionLinesCount,
+      missingLinesCount,
+      canPostGoodsReceipt: isCompliant,
+      recommendation
+    }
+  };
+}
+

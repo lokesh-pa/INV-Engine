@@ -361,7 +361,7 @@ export interface ApprovalDelegation {
   createdAt: string;
 }
 
-export type BulkApprovalAction = 'APPROVE_VARIANCE' | 'ADJUST_TO_INTERNAL' | 'APPROVE_ROUTINE';
+export type BulkApprovalAction = 'APPROVE_VARIANCE' | 'ADJUST_TO_INTERNAL' | 'APPROVE_ROUTINE' | 'REJECT_BILLING';
 
 export interface BulkApprovalRequest {
   itemIds: string[];

@@ -7,7 +7,8 @@ import {
   ShieldCheck,
   Building2,
   BellRing,
-  Printer
+  Printer,
+  Lock
 } from 'lucide-react';
 import { UserProfile, Currency } from '../types';
 import { SAMPLE_USERS } from '../data/mockCentralDb';
@@ -63,19 +64,19 @@ export const Header: React.FC<HeaderProps> = ({
   const getTabSubtitle = () => {
     switch (activeTab) {
       case 'vendor':
-        return 'INV Engine | Pre-Invoice Clearance & Internal Verification Desk';
+        return 'AB Company Internal Verification Portal';
       case 'manager':
-        return 'INV Engine | Resource Manager Discrepancy Authorization Queue';
+        return 'Resource Manager Authorization Queue';
       case 'finance':
-        return 'INV Engine | Corporate Accounts Payable & Financial Control';
+        return 'Corporate Accounts Payable & Financial Control';
       case 'database':
-        return 'INV Engine | Central Approved Timesheet Master Repository';
+        return 'Central Approved Timesheet Records';
       case 'notifications':
-        return 'INV Engine | Automated Alert Dispatch Log & Escalations';
+        return 'Automated Alert Dispatch Log';
       case 'ariba_validator':
-        return 'INV Engine | Domain COO Invoice Alignment & SAP Ariba Goods Receipt Pre-Check';
+        return 'Domain COO Invoice Alignment & SAP Ariba Goods Receipt Pre-Check';
       default:
-        return 'INV Engine | Invoice Reconciliation Engine';
+        return 'AB Company Internal Verification Portal';
     }
   };
 
@@ -105,61 +106,81 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Right Controls: Currency, Role, Alerts, Action Button */}
       <div className="flex items-center gap-3">
         
-        {/* Currency Badge (Matches Sleek Interface: px-3 py-1 bg-slate-100 rounded-md border border-slate-200 text-xs font-semibold) */}
-        <div className="hidden sm:flex items-center gap-1 px-3 py-1 bg-slate-100 rounded-md border border-slate-200 text-xs font-semibold text-slate-700">
-          <span>Currency:</span>
-          <select
-            id="currency-select"
-            value={currentCurrency}
-            onChange={(e) => onChangeCurrency(e.target.value as Currency)}
-            className="bg-transparent text-slate-900 font-bold focus:outline-hidden cursor-pointer"
-            title="Select Local Currency for Financial Calculations"
-          >
-            <option value="USD">USD ($)</option>
-            <option value="EUR">EUR (€)</option>
-            <option value="GBP">GBP (£)</option>
-            <option value="INR">INR (₹)</option>
-            <option value="SGD">SGD (S$)</option>
-          </select>
+        {/* Local Currency Badge: Locked to Local Currency of Purchase Order */}
+        <div 
+          id="po-currency-indicator"
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-md border border-slate-200 text-xs font-semibold text-slate-700"
+          title="Currency is automatically locked to the Local Currency of the Purchase Order"
+        >
+          <span className="text-slate-500 font-normal">PO Currency:</span>
+          <span className="font-bold text-slate-900">{currentCurrency}</span>
         </div>
 
-        {/* Role Switcher */}
-        <div className="relative">
-          <select
-            id="rbac-role-switcher"
-            value={currentUser.id}
-            onChange={(e) => {
-              const selected = SAMPLE_USERS.find(u => u.id === e.target.value);
-              if (selected) {
-                onSelectUser(selected);
-                if (selected.role === 'vendor') onChangeTab('vendor');
-                if (selected.role === 'manager') onChangeTab('manager');
-                if (selected.role === 'finance' || selected.role === 'admin') onChangeTab('finance');
-                if (selected.role === 'domain_coo') onChangeTab('ariba_validator');
-              }
-            }}
-            className="text-xs bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-800 font-medium cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+        {/* Role Identity & Switcher (Only Admin has access to switch roles) */}
+        {currentUser.role === 'admin' ? (
+          <div className="relative flex items-center gap-1.5">
+            <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 hidden lg:inline-flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-amber-600" />
+              <span>Admin Role Switcher</span>
+            </span>
+            <select
+              id="rbac-role-switcher"
+              value={currentUser.id}
+              onChange={(e) => {
+                const selected = SAMPLE_USERS.find(u => u.id === e.target.value);
+                if (selected) {
+                  onSelectUser(selected);
+                  if (selected.role === 'vendor') onChangeTab('vendor');
+                  if (selected.role === 'manager') onChangeTab('manager');
+                  if (selected.role === 'finance' || selected.role === 'admin') onChangeTab('finance');
+                  if (selected.role === 'domain_coo') onChangeTab('ariba_validator');
+                }
+              }}
+              className="text-xs bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-800 font-medium cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+            >
+              <optgroup label="🛡️ Global Administration">
+                <option value="user-admin-1">David Kim (Global Admin & Systems)</option>
+              </optgroup>
+              <optgroup label="🏢 Vendor Access">
+                <option value="user-vendor-1">Rajesh Sharma (Apex Global Vendor)</option>
+                <option value="user-vendor-2">Emily Watson (Accenture Vendor)</option>
+              </optgroup>
+              <optgroup label="👤 AB Resource Managers">
+                <option value="user-manager-1">Sarah Jenkins (Cloud Platform)</option>
+                <option value="user-manager-2">David Chen (Core Applications)</option>
+                <option value="user-manager-3">Elena Rostova (Data Platforms)</option>
+              </optgroup>
+              <optgroup label="👔 Domain COO Executive Group">
+                <option value="user-coo-1">Marcus Sterling (Domain COO - Cloud)</option>
+                <option value="user-coo-2">Victoria Vance (Domain COO - Core Apps)</option>
+              </optgroup>
+              <optgroup label="🏛️ AP Finance Controller">
+                <option value="user-finance-1">Michael Scott (Global AP Controller)</option>
+              </optgroup>
+            </select>
+          </div>
+        ) : (
+          <div 
+            id="locked-user-profile-badge"
+            className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs" 
+            title="Logged-in Profile (Role switching restricted to System Administrators)"
           >
-            <optgroup label="👔 Domain COO Executive Group">
-              <option value="user-coo-1">Marcus Sterling (Domain COO - Cloud)</option>
-              <option value="user-coo-2">Victoria Vance (Domain COO - Core Apps)</option>
-            </optgroup>
-            <optgroup label="🛡️ Global Administration">
-              <option value="user-admin-1">David Kim (Global Admin & Systems)</option>
-            </optgroup>
-            <optgroup label="🏢 Vendor Access">
-              <option value="user-vendor-1">Rajesh Sharma (Apex Global Vendor)</option>
-            </optgroup>
-            <optgroup label="👤 AB Resource Managers">
-              <option value="user-manager-1">Sarah Jenkins (Cloud Platform)</option>
-              <option value="user-manager-2">David Chen (Core Applications)</option>
-              <option value="user-manager-3">Elena Rostova (Data Platforms)</option>
-            </optgroup>
-            <optgroup label="🏛️ AP Finance Controller">
-              <option value="user-finance-1">Michael Scott (Global AP Controller)</option>
-            </optgroup>
-          </select>
-        </div>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+            <div className="flex flex-col text-left">
+              <span className="font-bold text-slate-800 flex items-center gap-1 leading-tight">
+                {currentUser.name}
+                <Lock className="w-3 h-3 text-slate-400" />
+              </span>
+              <span className="text-[10px] text-slate-500 font-medium">
+                {currentUser.role === 'vendor' 
+                  ? `Vendor: ${currentUser.vendorName || 'Apex Global Solutions'}`
+                  : currentUser.role === 'manager'
+                  ? `Manager: ${currentUser.department ? currentUser.department.split('&')[0].trim() : 'AB Company'}`
+                  : currentUser.role.toUpperCase()}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Send Reminder Quick Button */}
         {onOpenSendReminder && (

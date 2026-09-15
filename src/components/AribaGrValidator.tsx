@@ -19,6 +19,8 @@ import { InvoiceBatch, UserProfile, AribaGrValidationResult } from '../types';
 import { validateInvoiceAgainstClearance } from '../utils/aribaGrValidatorEngine';
 import { getDomainCooForManager } from '../data/mockCentralDb';
 import * as XLSX from 'xlsx';
+import { parsePdfInvoice } from '../utils/pdfInvoiceParser';
+import { downloadSampleInvoicePdf } from '../utils/samplePdfInvoiceGenerator';
 
 interface AribaGrValidatorProps {
   batches: InvoiceBatch[];
@@ -136,12 +138,38 @@ export const AribaGrValidator: React.FC<AribaGrValidatorProps> = ({
     );
   }, [currentBatch, activeRowsToValidate, currentUser]);
 
-  // Handle file upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle file upload (Supports Excel, CSV, and PDF commercial invoices)
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setFileName(file.name);
+
+    if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const parsedPdf = await parsePdfInvoice(arrayBuffer);
+
+        if (parsedPdf.lines && parsedPdf.lines.length > 0) {
+          setCustomInvoiceRows(parsedPdf.lines);
+          setActiveScenario('custom');
+          setSignedOff(false);
+          onLogAudit(
+            'ARIBA_GR_INVOICE_UPLOADED',
+            `Domain COO uploaded vendor PDF invoice "${file.name}" with ${parsedPdf.lines.length} extracted line items for PO ${currentBatch?.poNumber} (Invoice #: ${parsedPdf.invoiceNumber || 'N/A'}).`,
+            currentBatch?.id,
+            currentBatch?.poNumber
+          );
+        } else {
+          alert('No tabular line items could be detected in this PDF. Please ensure the invoice contains consultant line items, billed days, and rates, or upload in Excel/CSV format.');
+        }
+      } catch (err) {
+        console.error('Failed to parse PDF invoice file:', err);
+        alert('Failed to parse PDF invoice. Please check the file format or try uploading an Excel/CSV invoice.');
+      }
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -328,10 +356,10 @@ Goods Receipt Verdict: AUTHORIZED FOR SAP ARIBA GR CREATION`;
           <div className="flex items-center gap-2">
             <label className="cursor-pointer bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors">
               <Upload className="w-4 h-4 text-indigo-600" />
-              Upload Vendor Actual Invoice (.xlsx, .csv)
+              Upload Vendor Invoice (.pdf, .xlsx, .csv)
               <input 
                 type="file" 
-                accept=".xlsx,.xls,.csv" 
+                accept=".xlsx,.xls,.csv,.pdf" 
                 onChange={handleFileUpload} 
                 className="hidden" 
               />
@@ -355,67 +383,94 @@ Goods Receipt Verdict: AUTHORIZED FOR SAP ARIBA GR CREATION`;
           </div>
         </div>
 
-        {/* Fast Test Scenarios Selector */}
-        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-1">
-            Fast Test Scenarios:
-          </span>
-          <button
-            onClick={() => {
-              setCustomInvoiceRows(null);
-              setActiveScenario('clean');
-              setFileName('Apex_Final_Invoice_CleanMatch.xlsx');
-              setSignedOff(false);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
-              activeScenario === 'clean' && !customInvoiceRows
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold shadow-xs'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            Clean Matching Invoice (Go-Ahead)
-          </button>
-
-          <button
-            onClick={() => {
-              setCustomInvoiceRows(null);
-              setActiveScenario('tampered');
-              setFileName('Apex_Final_Invoice_Overbilled.xlsx');
-              setSignedOff(false);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
-              activeScenario === 'tampered' && !customInvoiceRows
-                ? 'bg-red-50 text-red-800 border-red-300 font-semibold shadow-xs'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <XCircle className="w-3.5 h-3.5 text-red-600" />
-            Tampered Invoice (+3 Days Overbilled)
-          </button>
-
-          <button
-            onClick={() => {
-              setCustomInvoiceRows(null);
-              setActiveScenario('alt_format');
-              setFileName('Apex_Invoice_AlternateFormat.csv');
-              setSignedOff(false);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
-              activeScenario === 'alt_format' && !customInvoiceRows
-                ? 'bg-blue-50 text-blue-800 border-blue-300 font-semibold shadow-xs'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5 text-blue-600" />
-            Alternate Vendor Format (No Email, 'Worked Days')
-          </button>
-
-          {customInvoiceRows && (
-            <span className="px-2.5 py-1 rounded-md text-xs font-mono bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
-              <FileCheck2 className="w-3.5 h-3.5" />
-              Loaded: {fileName} ({customInvoiceRows.length} rows)
+        {/* Fast Test Scenarios Selector & PDF Sample Generators */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-1">
+              Test Scenarios:
             </span>
+            <button
+              onClick={() => {
+                setCustomInvoiceRows(null);
+                setActiveScenario('clean');
+                setFileName('Apex_Final_Invoice_CleanMatch.xlsx');
+                setSignedOff(false);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
+                activeScenario === 'clean' && !customInvoiceRows
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold shadow-xs'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              Clean Matching Invoice (Go-Ahead)
+            </button>
+
+            <button
+              onClick={() => {
+                setCustomInvoiceRows(null);
+                setActiveScenario('tampered');
+                setFileName('Apex_Final_Invoice_Overbilled.xlsx');
+                setSignedOff(false);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
+                activeScenario === 'tampered' && !customInvoiceRows
+                  ? 'bg-red-50 text-red-800 border-red-300 font-semibold shadow-xs'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <XCircle className="w-3.5 h-3.5 text-red-600" />
+              Tampered Invoice (+3 Days Overbilled)
+            </button>
+
+            <button
+              onClick={() => {
+                setCustomInvoiceRows(null);
+                setActiveScenario('alt_format');
+                setFileName('Apex_Invoice_AlternateFormat.csv');
+                setSignedOff(false);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all ${
+                activeScenario === 'alt_format' && !customInvoiceRows
+                  ? 'bg-blue-50 text-blue-800 border-blue-300 font-semibold shadow-xs'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5 text-blue-600" />
+              Alternate Vendor Format (No Email, 'Worked Days')
+            </button>
+
+            {customInvoiceRows && (
+              <span className="px-2.5 py-1 rounded-md text-xs font-mono bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
+                <FileCheck2 className="w-3.5 h-3.5" />
+                Loaded: {fileName} ({customInvoiceRows.length} rows)
+              </span>
+            )}
+          </div>
+
+          {/* Download Sample PDF Invoices for Testing */}
+          {currentBatch && (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-slate-400">Sample PDFs:</span>
+              <button
+                type="button"
+                onClick={() => downloadSampleInvoicePdf(currentBatch, false)}
+                className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-medium flex items-center gap-1 shadow-2xs transition-colors"
+                title="Download genuine compliant PDF invoice matching approved clearance"
+              >
+                <Download className="w-3 h-3" />
+                Valid PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadSampleInvoicePdf(currentBatch, true)}
+                className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-700 border border-red-200 rounded-md font-medium flex items-center gap-1 shadow-2xs transition-colors"
+                title="Download overbilled/tampered PDF invoice to test rejection catching"
+              >
+                <Download className="w-3 h-3" />
+                Overbilled PDF
+              </button>
+            </div>
           )}
         </div>
       </div>

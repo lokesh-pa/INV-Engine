@@ -66,6 +66,11 @@ export const BulkApprovalModal: React.FC<BulkApprovalModalProps> = ({
     APPROVE_ROUTINE: [
       'Routine 100% timesheet reconciliation verified and approved for invoice clearance.',
       'Internal delivery milestones verified against approved contract deliverables.'
+    ],
+    REJECT_BILLING: [
+      'Billed days exceed approved project scope. Please revise invoice sheet to match internal approved days.',
+      'Unauthorized weekend/overtime hours claimed. Please adjust to standard contracted hours and resubmit.',
+      'Claimed daily rate exceeds signed SOW schedule. Please correct rate and resubmit for approval.'
     ]
   };
 
@@ -155,18 +160,18 @@ export const BulkApprovalModal: React.FC<BulkApprovalModalProps> = ({
                 onClick={() => setAction('APPROVE_VARIANCE')}
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
                   action === 'APPROVE_VARIANCE'
-                    ? 'bg-blue-50/70 border-blue-600 ring-2 ring-blue-600/20'
+                    ? 'bg-orange-50/80 border-orange-500 ring-2 ring-orange-500/20'
                     : 'bg-white border-slate-200 hover:border-slate-300'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-900">1. Authorize Overtime / Variances</span>
+                  <span className="text-xs font-bold text-orange-950">1. Approve Exceptions</span>
                   <input 
                     type="radio" 
                     name="bulkAction" 
                     checked={action === 'APPROVE_VARIANCE'} 
                     onChange={() => setAction('APPROVE_VARIANCE')}
-                    className="text-blue-600" 
+                    className="text-orange-600 accent-orange-600" 
                   />
                 </div>
                 <p className="text-[11px] text-slate-600 mt-1">
@@ -179,22 +184,46 @@ export const BulkApprovalModal: React.FC<BulkApprovalModalProps> = ({
                 onClick={() => setAction('ADJUST_TO_INTERNAL')}
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
                   action === 'ADJUST_TO_INTERNAL'
-                    ? 'bg-amber-50/70 border-amber-600 ring-2 ring-amber-600/20'
+                    ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-500/20'
                     : 'bg-white border-slate-200 hover:border-slate-300'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-amber-900">2. Adjust to Approved Timesheets</span>
+                  <span className="text-xs font-bold text-emerald-950">2. Cap to DB Timesheets</span>
                   <input 
                     type="radio" 
                     name="bulkAction" 
                     checked={action === 'ADJUST_TO_INTERNAL'} 
                     onChange={() => setAction('ADJUST_TO_INTERNAL')}
-                    className="text-amber-600" 
+                    className="text-emerald-600 accent-emerald-600" 
                   />
                 </div>
                 <p className="text-[11px] text-slate-600 mt-1">
-                  Cap all selected rows strictly to internal timesheets ({totalInternalDays} total days). Eliminates variance exposure.
+                  Cap all selected rows strictly to internal database timesheets ({totalInternalDays} total days). Eliminates variance exposure.
+                </p>
+              </div>
+
+              {/* Option 3: Reject Lines */}
+              <div 
+                onClick={() => setAction('REJECT_BILLING')}
+                className={`p-3.5 rounded-xl border cursor-pointer transition-all sm:col-span-2 ${
+                  action === 'REJECT_BILLING'
+                    ? 'bg-red-50/80 border-red-500 ring-2 ring-red-500/20'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-red-950">3. Bulk Reject Lines (Requires Vendor Revision)</span>
+                  <input 
+                    type="radio" 
+                    name="bulkAction" 
+                    checked={action === 'REJECT_BILLING'} 
+                    onChange={() => setAction('REJECT_BILLING')}
+                    className="text-red-600 accent-red-600" 
+                  />
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Reject all selected lines back to the supplier. Vendor must adjust claimed days in the Vendor Portal and resubmit.
                 </p>
               </div>
 
@@ -284,9 +313,15 @@ export const BulkApprovalModal: React.FC<BulkApprovalModalProps> = ({
               type="submit"
               form="bulk-approval-form"
               disabled={!justification.trim() || isSubmitting}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 active:scale-95"
+              className={`px-5 py-2.5 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 active:scale-95 ${
+                action === 'REJECT_BILLING'
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : action === 'ADJUST_TO_INTERNAL'
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : 'bg-orange-600 hover:bg-orange-700'
+              }`}
             >
-              <span>Execute Bulk Action ({selectedItems.length})</span>
+              <span>{action === 'REJECT_BILLING' ? 'Confirm Bulk Rejection' : 'Execute Bulk Action'} ({selectedItems.length})</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
